@@ -1,8 +1,8 @@
-﻿﻿import { ComponentType, useEffect, useMemo, useState } from 'react'
+import { ComponentType, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { api, getErrorMessage } from '../api'
-import { AdminIcon, ContinuingIcon, DashboardIcon, EnrollmentIcon, ProspectusIcon, TranscriptIcon } from '../components/Icons'
+import { AdminIcon, ContinuingIcon, DashboardIcon, EnrollmentIcon, ProspectusIcon, StaffChatIcon, TranscriptIcon } from '../components/Icons'
 
 type RecentMenu = {
   path: string
@@ -24,7 +24,10 @@ const iconMap: Record<string, ComponentType> = {
   Prospectus: ProspectusIcon,
   Enrollment: EnrollmentIcon,
   Continuing: ContinuingIcon,
+  'Staff chat': StaffChatIcon,
+  'Staff Chat': StaffChatIcon,
   Transcript: TranscriptIcon,
+  'Edit Profile': AdminIcon,
 }
 
 const RECENT_MENU_KEY = 'ccb_recent_menus'
@@ -65,6 +68,7 @@ export function DashboardPage() {
       { path: '/prospectus', label: 'Prospectus' },
       { path: '/enrollment', label: 'Enrollment' },
       { path: '/continuing', label: 'Continuing' },
+      { path: '/profile', label: 'Edit Profile' },
     ]
   }, [recentMenus])
 

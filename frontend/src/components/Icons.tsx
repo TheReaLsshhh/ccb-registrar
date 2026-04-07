@@ -38,6 +38,12 @@ export const ContinuingIcon = () => (
   </svg>
 )
 
+export const StaffChatIcon = () => (
+  <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+  </svg>
+)
+
 //Add also the Transcript icon here for Recently Used Menus
 export const TranscriptIcon = () => (
   <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -136,6 +142,53 @@ export const SaveIcon = () => (
   </svg>
 )
 
+export const TrashBinIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+    <path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </svg>
+)
+
+export const MaleStudentIcon = () => (
+  <svg
+    viewBox="0 0 64 64"
+    aria-hidden="true"
+    width="20"
+    height="20"
+    fill="currentColor"
+  >
+    <circle cx="32" cy="18" r="11" />
+    <path d="M17 35c2-4 7-7 15-7s13 3 15 7l3 8c1 4-2 7-6 7H20c-4 0-7-3-6-7l3-8z" />
+  </svg>
+)
+
+export const FemaleStudentIcon = () => (
+  <svg
+    viewBox="0 0 64 64"
+    aria-hidden="true"
+    width="20"
+    height="20"
+    fill="currentColor"
+  >
+    <circle cx="32" cy="17" r="10" />
+    <path d="M19 24c2-6 7-10 13-10s11 4 13 10l2 8H17l2-8z" />
+    <path d="M16 35c2-4 7-7 16-7s14 3 16 7l3 8c1 4-2 7-6 7H19c-4 0-7-3-6-7l3-8z" />
+  </svg>
+)
+
 export const FolderIcon = () => (
   <svg
     viewBox="0 0 24 24"
@@ -203,5 +256,21 @@ export const TORIcon = () => (
     <line x1="16" y1="13" x2="8" y2="13" />
     <line x1="16" y1="17" x2="8" y2="17" />
     <polyline points="10 9 9 9 8 9" />
+  </svg>
+)
+
+export const PdfIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18">
+    <path fill="#DC2626" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+    <path fill="#fff" d="M14 2v6h6" />
+    <path fill="#fff" d="M8 12h8v1H8zm0 3h8v1H8zm0 3h5v1H8z" />
+  </svg>
+)
+
+export const ExcelIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18">
+    <path fill="#217346" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+    <path fill="#fff" d="M14 2v6h6" />
+    <path fill="none" stroke="#fff" strokeWidth="1" d="M7 10h10M7 13h10M7 16h10M10 10v7M14 10v7" />
   </svg>
 )

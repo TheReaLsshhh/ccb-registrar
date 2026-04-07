@@ -1,0 +1,46 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Students with Multiple Academic History Rows</h1>
+    <p>This report lists students who have more than one row in <code>registrar_academichistory</code>.</p>
+
+    {% if report_rows %}
+    <table>
+        <thead>
+            <tr>
+                <th>Student ID</th>
+                <th>Student Name</th>
+                <th>History Count</th>
+                <th>Rows</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in report_rows %}
+            <tr>
+                <td>{{ row.student_id }}</td>
+                <td>{{ row.student_name }}</td>
+                <td>{{ row.history_count }}</td>
+                <td>
+                    {% for history in row.histories %}
+                    <div>
+                        #{{ history.id }}:
+                        AY {{ history.academic_year }},
+                        Sem {{ history.semester }},
+                        Year {{ history.year_level }},
+                        {{ history.status }}
+                        {% if history.section_name %},
+                        Section {{ history.section_name }}
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No students currently have multiple academic history rows.</p>
+    {% endif %}
+</div>
+{% endblock %}

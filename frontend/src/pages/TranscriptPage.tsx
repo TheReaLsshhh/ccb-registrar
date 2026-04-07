@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { FormEvent, Fragment, useEffect, useState } from 'react'
+
 import { api, getErrorMessage } from '../api'
+import { SearchIcon } from '../components/Icons'
 
 interface TORSubject {
   id: number
@@ -8,6 +10,7 @@ interface TORSubject {
   grade_final: string
   completion: string
   credits: number
+  academic_year: string
   semester: number
   year_level: number
 }
@@ -19,6 +22,10 @@ interface StudentDetail {
   first_name: string
   middle_name: string
   extension_name: string
+  gender?: string
+  date_of_birth?: string | null
+  nationality?: string
+  admission_date?: string | null
   program: number
   year_level: number
   academic_year: string
@@ -33,26 +40,38 @@ interface Program {
 
 export function TranscriptPage() {
   const [searchId, setSearchId] = useState('')
+  const [isModalOpen, setIsModalOpen] = useState(false)
   const [student, setStudent] = useState<StudentDetail | null>(null)
   const [programs, setPrograms] = useState<Program[]>([])
   const [torSubjects, setTorSubjects] = useState<TORSubject[]>([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const loadPrograms = async () => {
-    try {
-      const response = await api.get<Program[]>('/programs/')
-      setPrograms(response.data)
-    } catch (err) {
-      setError(getErrorMessage(err))
-    }
-  }
-
   useEffect(() => {
-    loadPrograms()
+    const loadPrograms = async () => {
+      try {
+        const response = await api.get<Program[]>('/programs/')
+        setPrograms(response.data)
+      } catch (err) {
+        setError(getErrorMessage(err))
+      }
+    }
+
+    void loadPrograms()
   }, [])
 
-  const searchStudent = async (event: React.FormEvent<HTMLFormElement>) => {
+  const closeModal = () => {
+    setIsModalOpen(false)
+    setError('')
+    setSuccess('')
+  }
+
+  const loadTORSubjects = async (studentId: string) => {
+    const response = await api.get<TORSubject[]>(`/students/${studentId}/tor-subjects/`)
+    setTorSubjects(response.data)
+  }
+
+  const searchStudent = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError('')
     setSuccess('')
@@ -63,159 +82,204 @@ export function TranscriptPage() {
       const response = await api.get<StudentDetail>(`/students/${searchId}/`)
       const found = response.data
       setStudent(found)
-      setSuccess('Student found.')
-      
-      // Load TOR subjects for this student
-      loadTORSubjects(found.id)
+      await loadTORSubjects(found.student_id)
+      setIsModalOpen(true)
     } catch (err) {
       setError(getErrorMessage(err))
     }
   }
 
-  const loadTORSubjects = async (studentId: number) => {
-    try {
-      const response = await api.get<TORSubject[]>(`/students/${studentId}/tor-subjects/`)
-      setTorSubjects(response.data)
-    } catch (err) {
-      // Handle 404 error gracefully - TOR endpoint not implemented yet
-      if (err instanceof Error && err.message.includes('404')) {
-        setError('TOR subjects endpoint not implemented yet. Please contact administrator.')
-      } else {
-        setError(getErrorMessage(err))
-      }
-    }
-  }
-
-  const groupSubjectsByYearAndSemester = () => {
-    const grouped: { [key: string]: TORSubject[] } = {}
-    
-    torSubjects.forEach(subject => {
-      const key = `${subject.year_level}th Year - ${subject.semester === 1 ? '1st' : subject.semester === 2 ? '2nd' : 'Summer'} Semester`
-      if (!grouped[key]) {
-        grouped[key] = []
-      }
-      grouped[key].push(subject)
-    })
-    
+  const groupedSubjects = torSubjects.reduce<Record<string, TORSubject[]>>((grouped, subject) => {
+    const semesterLabel = subject.semester === 1 ? '1st Semester' : subject.semester === 2 ? '2nd Semester' : 'Summer'
+    const yearLabel =
+      subject.year_level === 1
+        ? '1st Year'
+        : subject.year_level === 2
+          ? '2nd Year'
+          : subject.year_level === 3
+            ? '3rd Year'
+            : `${subject.year_level}th Year`
+    const key = `${subject.academic_year} | ${yearLabel} | ${semesterLabel}`
+    if (!grouped[key]) grouped[key] = []
+    grouped[key].push(subject)
     return grouped
-  }
+  }, {})
 
-  const groupedSubjects = groupSubjectsByYearAndSemester()
-  const yearSemesterOrder = [
-    '1st Year - 1st Semester',
-    '1st Year - 2nd Semester',
-    '2nd Year - 1st Semester', 
-    '2nd Year - 2nd Semester',
-    '3rd Year - 1st Semester',
-    '3rd Year - 2nd Semester',
-    '4th Year - 1st Semester',
-    '4th Year - 2nd Semester'
-  ]
+  const yearSemesterOrder = Object.keys(groupedSubjects).sort((a, b) => {
+    const first = groupedSubjects[a]?.[0]
+    const second = groupedSubjects[b]?.[0]
+    if (!first || !second) return a.localeCompare(b)
+    const yearCompare = first.academic_year.localeCompare(second.academic_year)
+    if (yearCompare !== 0) return yearCompare
+    const levelCompare = first.year_level - second.year_level
+    if (levelCompare !== 0) return levelCompare
+    return first.semester - second.semester
+  })
+
+  const programName = student ? programs.find((program) => program.id === student.program)?.name || '-' : '-'
+  const fullName = student
+    ? `${student.last_name}, ${student.first_name}${student.middle_name ? ` ${student.middle_name}` : ''}${student.extension_name ? ` ${student.extension_name}` : ''}`
+    : '-'
 
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1>Transcript of Records</h1>
-      </div>
+    <section className="card">
+      <h1>Transcript of Records</h1>
+      <p>Search a student by ID and open the transcript in a registrar-style modal.</p>
 
-      <div className="sheet-container">
-        <div className="enroll-sheet-form">
-          <div className="sheet-section-title">Search Student</div>
-          <form onSubmit={searchStudent} style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ position: 'relative', flex: 1 }}>
-              <input
-                type="text"
-                placeholder="Enter Student ID"
-                value={searchId}
-                onChange={(e) => setSearchId(e.target.value)}
-                required
-                style={{ width: '100%' }}
-              />
-            </div>
-            <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}>
-              Load TOR
-            </button>
-          </form>
+      <h2 className="section-title">Search Existing Student</h2>
+      <form className="form-grid" onSubmit={searchStudent}>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <span
+            style={{
+              position: 'absolute',
+              left: '10px',
+              cursor: searchId ? 'pointer' : 'default',
+              userSelect: 'none',
+            }}
+            onClick={() => searchId && setSearchId('')}
+          >
+            {searchId ? '✕' : '🔍'}
+          </span>
+          <input
+            placeholder="Student ID"
+            value={searchId}
+            onChange={(e) => setSearchId(e.target.value)}
+            required
+            style={{ paddingLeft: '30px', width: '100%' }}
+          />
+        </div>
+        <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <SearchIcon /> Search
+        </button>
+      </form>
 
-          {error && <div className="error-message">{error}</div>}
-          {success && <div className="success-message">{success}</div>}
-
-          {student && (
-            <>
-              <div className="sheet-section-title">Student Information</div>
-              <div className="sheet-grid">
-                <div className="field-inline-label" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span>Name</span>
-                  <div className="readonly-field" style={{ flex: 1 }}>
-                    {`${student.last_name}, ${student.first_name} ${student.middle_name || ''}. ${student.extension_name || ''}`}
-                  </div>
-                </div>
-                <div className="field-inline-label" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span>Student ID</span>
-                  <div className="readonly-field" style={{ flex: 1 }}>{student.student_id}</div>
-                </div>
-                <div className="field-inline-label" style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span>Program</span>
-                  <div className="readonly-field" style={{ flex: 1 }}>
-                    {programs.find((p) => p.id === student.program)?.name || '-'}
-                  </div>
-                </div>
+      {error && <div className="error-message">{error}</div>}
+      {isModalOpen && (
+        <div className="enroll-modal-overlay">
+          <div className="enroll-modal transcript-modal" style={{ overflowY: 'auto', maxHeight: '90vh' }} onClick={(e) => e.stopPropagation()}>
+            <div className="enroll-modal-header">
+              <h2>Transcript of Records</h2>
+              <div className="modal-header-actions">
+                <button type="button" onClick={closeModal}>
+                  Close
+                </button>
               </div>
+            </div>
 
-              <div className="sheet-section-title">Transcript of Records</div>
-              
-              {yearSemesterOrder.map(yearSemester => {
-                const subjects = groupedSubjects[yearSemester]
-                if (!subjects || subjects.length === 0) return null
-                
-                return (
-                  <div key={yearSemester} style={{ marginBottom: '2rem' }}>
-                    <h3 style={{ marginBottom: '1rem', borderBottom: '2px solid #333', paddingBottom: '0.5rem' }}>
-                      {yearSemester}
-                    </h3>
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th style={{ width: '15%' }}>Subject Code</th>
-                            <th style={{ width: '40%' }}>Descriptive Title</th>
-                            <th style={{ width: '15%' }}>Grade Final</th>
-                            <th style={{ width: '15%' }}>Completion</th>
-                            <th style={{ width: '15%' }}>Credits</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {subjects.map((subject) => (
-                            <tr key={subject.id}>
-                              <td>{subject.subject_code}</td>
-                              <td>{subject.descriptive_title}</td>
-                              <td>{subject.grade_final}</td>
-                              <td>{subject.completion}</td>
-                              <td>{subject.credits}</td>
-                            </tr>
-                          ))}
-                          <tr style={{ fontWeight: 'bold', borderTop: '2px solid #333' }}>
-                            <td colSpan={4} style={{ textAlign: 'right' }}>Total Credits:</td>
-                            <td>
-                              {subjects.reduce((sum, subject) => sum + subject.credits, 0)}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+            <div className="enroll-sheet-form">
+              {error && <div className="error-message">{error}</div>}
+
+              {student && (
+                <div className="transcript-document">
+                  <div className="transcript-watermark" aria-hidden="true">
+                    <img src="/Picture2.png" alt="" />
+                  </div>
+
+                  <div className="transcript-doc-header">
+                    <div className="transcript-doc-brand">
+                      <img src="/Picture2.png" alt="" className="transcript-doc-logo" />
+                      <div className="transcript-doc-title-group">
+                        <div className="transcript-doc-school">CITY COLLEGE OF BAYAWAN</div>
+                        <div className="transcript-doc-office">OFFICE OF THE COLLEGE REGISTRAR</div>
+                        <div className="transcript-doc-copy">Official Transcript of Records</div>
+                      </div>
+                      <img src="/ccb_registrar_logo.png" alt="" className="transcript-doc-logo transcript-doc-logo--secondary" />
                     </div>
                   </div>
-                )
-              })}
 
-              {torSubjects.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>
-                  No TOR subjects found for this student.
+                  <div className="transcript-doc-panel">
+                    <div className="transcript-doc-section-title">Personal Data</div>
+                    <div className="transcript-doc-info-grid">
+                      <div><span>Name:</span> {fullName}</div>
+                      <div><span>Student No.:</span> {student.student_id}</div>
+                      <div><span>Date of Birth:</span> {student.date_of_birth || '-'}</div>
+                      <div><span>Gender:</span> {student.gender || '-'}</div>
+                      <div><span>Nationality:</span> {student.nationality || '-'}</div>
+                      <div><span>Academic Program/Course:</span> {programName}</div>
+                    </div>
+                  </div>
+
+                  <div className="transcript-doc-panel">
+                    <div className="transcript-doc-section-title">Entrance Data</div>
+                    <div className="transcript-doc-info-grid transcript-doc-info-grid--compact">
+                      <div><span>Date/Term Admitted:</span> {student.admission_date || '-'}</div>
+                      <div><span>School Year:</span> {student.academic_year || '-'}</div>
+                      <div><span>Current Year Level:</span> {student.year_level || '-'}</div>
+                      <div><span>Current Semester:</span> {student.semester || '-'}</div>
+                    </div>
+                  </div>
+
+                  <div className="transcript-doc-panel transcript-doc-panel--record">
+                    <div className="transcript-doc-section-title">Academic Record</div>
+
+                    {yearSemesterOrder.length ? (
+                      <div className="table-wrap transcript-doc-table-wrap">
+                        <table className="transcript-doc-table">
+                          <thead>
+                              <tr>
+                                <th style={{ width: '22%' }}>Term &amp; School Year</th>
+                                <th style={{ width: '18%' }}>Subject Code</th>
+                                <th>Descriptive Title</th>
+                                <th style={{ width: '10%' }}>Credits</th>
+                              </tr>
+                            </thead>
+                          <tbody>
+                            {yearSemesterOrder.map((yearSemester) => {
+                              const subjects = groupedSubjects[yearSemester]
+                              if (!subjects || subjects.length === 0) return null
+
+                              return (
+                                <Fragment key={yearSemester}>
+                                  <tr className="transcript-doc-term-row">
+                                    <td colSpan={5}>{yearSemester}</td>
+                                  </tr>
+                                  {subjects.map((subject, index) => (
+                                    <tr key={subject.id}>
+                                      <td>{index === 0 ? yearSemester : ''}</td>
+                                      <td>{subject.subject_code}</td>
+                                      <td>{subject.descriptive_title}</td>
+                                      <td>{subject.credits}</td>
+                                    </tr>
+                                  ))}
+                                  <tr className="transcript-total-row">
+                                    <td colSpan={3} style={{ textAlign: 'right' }}>Total Credits:</td>
+                                    <td>{subjects.reduce((sum, subject) => sum + subject.credits, 0)}</td>
+                                  </tr>
+                                </Fragment>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="transcript-empty-state">
+                        No TOR subjects found for this student.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="transcript-doc-footer">
+                    <div className="transcript-doc-legend">
+                      <div className="transcript-doc-section-title transcript-doc-section-title--small">Remarks</div>
+                      <p>Grades are not available yet. This copy currently lists the student's taken subjects and earned credits only.</p>
+                    </div>
+                    <div className="transcript-doc-signatures">
+                      <div className="transcript-doc-sign-box">
+                        <span>Prepared by</span>
+                        <strong>COLLEGE REGISTRAR</strong>
+                      </div>
+                      <div className="transcript-doc-sign-box">
+                        <span>Checked by</span>
+                        <strong>REGISTRAR ADMIN</strong>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
-            </>
-          )}
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </section>
   )
 }

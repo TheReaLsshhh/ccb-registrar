@@ -1,4 +1,4 @@
-﻿import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 
 import { api, getErrorMessage } from '../api'
 import { SaveIcon } from '../components/Icons'
@@ -25,6 +25,17 @@ type AcademicTerm = {
   is_active: boolean
 }
 
+type ProgramOffering = {
+  id: number
+  program: number
+  program_name: string
+  department_name: string
+  year_level: number
+  semester: number
+  program_adviser: string
+  school_dean: string
+}
+
 type Section = {
   id: number
   name: string
@@ -33,13 +44,14 @@ type Section = {
   semester: number
 }
 
-type FolderKey = 'departments' | 'programs' | 'terms' | 'sections'
+type FolderKey = 'departments' | 'programs' | 'programOfferings' | 'terms' | 'sections'
 
 const ADMIN_FOLDERS_STORAGE_KEY = 'ccb_admin_folders_open_state'
 
 const defaultOpenFolders: Record<FolderKey, boolean> = {
   departments: true,
   programs: false,
+  programOfferings: true,
   terms: false,
   sections: false,
 }
@@ -54,6 +66,7 @@ export function AdminPage() {
 
   const [departments, setDepartments] = useState<Department[]>([])
   const [programs, setPrograms] = useState<Program[]>([])
+  const [programOfferings, setProgramOfferings] = useState<ProgramOffering[]>([])
   const [terms, setTerms] = useState<AcademicTerm[]>([])
   const [sections, setSections] = useState<Section[]>([])
 
@@ -65,6 +78,13 @@ export function AdminPage() {
   const [programAdviser, setProgramAdviser] = useState('')
   const [programDean, setProgramDean] = useState('')
   const [editingProgramId, setEditingProgramId] = useState<number | null>(null)
+
+  const [offeringProgram, setOfferingProgram] = useState('')
+  const [offeringYearLevel, setOfferingYearLevel] = useState('1')
+  const [offeringSemester, setOfferingSemester] = useState('1')
+  const [offeringAdviser, setOfferingAdviser] = useState('')
+  const [offeringDean, setOfferingDean] = useState('')
+  const [editingOfferingId, setEditingOfferingId] = useState<number | null>(null)
 
   const [termYearLabel, setTermYearLabel] = useState(defaultAcademicYear)
   const [termSemester, setTermSemester] = useState('1')
@@ -89,6 +109,7 @@ export function AdminPage() {
       return {
         departments: parsed.departments ?? defaultOpenFolders.departments,
         programs: parsed.programs ?? defaultOpenFolders.programs,
+        programOfferings: parsed.programOfferings ?? defaultOpenFolders.programOfferings,
         terms: parsed.terms ?? defaultOpenFolders.terms,
         sections: parsed.sections ?? defaultOpenFolders.sections,
       }
@@ -98,14 +119,16 @@ export function AdminPage() {
   })
 
   const loadData = async () => {
-    const [deptResp, progResp, termResp, sectionResp] = await Promise.all([
+    const [deptResp, progResp, offeringResp, termResp, sectionResp] = await Promise.all([
       api.get<Department[]>('/departments/'),
       api.get<Program[]>('/programs/'),
+      api.get<ProgramOffering[]>('/program-offerings/'),
       api.get<AcademicTerm[]>('/terms/'),
       api.get<Section[]>('/sections/'),
     ])
     setDepartments(deptResp.data)
     setPrograms(progResp.data)
+    setProgramOfferings(offeringResp.data)
     setTerms(termResp.data)
     setSections(sectionResp.data)
   }
@@ -141,6 +164,15 @@ export function AdminPage() {
     setProgramAdviser('')
     setProgramDean('')
     setEditingProgramId(null)
+  }
+
+  const resetOfferingForm = () => {
+    setOfferingProgram('')
+    setOfferingYearLevel('1')
+    setOfferingSemester('1')
+    setOfferingAdviser('')
+    setOfferingDean('')
+    setEditingOfferingId(null)
   }
 
   const resetTermForm = () => {
@@ -225,7 +257,11 @@ export function AdminPage() {
     }, editingSectionId ? 'Section updated.' : 'Section created.')
   }
 
-  const handleDelete = async (resource: 'departments' | 'programs' | 'terms' | 'sections', id: number, label: string) => {
+  const handleDelete = async (
+    resource: 'departments' | 'programs' | 'program-offerings' | 'terms' | 'sections',
+    id: number,
+    label: string,
+  ) => {
     const confirmed = window.confirm(`Delete ${label}?`)
     if (!confirmed) return
     await withFeedback(async () => {
@@ -252,6 +288,15 @@ export function AdminPage() {
     setEditingProgramId(program.id)
   }
 
+  const startEditOffering = (offering: ProgramOffering) => {
+    setOfferingProgram(String(offering.program))
+    setOfferingYearLevel(String(offering.year_level))
+    setOfferingSemester(String(offering.semester))
+    setOfferingAdviser(offering.program_adviser || '')
+    setOfferingDean(offering.school_dean || '')
+    setEditingOfferingId(offering.id)
+  }
+
   const startEditTerm = (term: AcademicTerm) => {
     setTermYearLabel(term.year_label)
     setTermSemester(String(term.semester))
@@ -273,15 +318,12 @@ export function AdminPage() {
 
   const programLabel = (id: number) => programs.find((p) => p.id === id)?.name ?? `Program #${id}`
   const departmentLabel = (id: number) => departments.find((d) => d.id === id)?.name ?? `Department #${id}`
-  const programYearLevelsLabel = (programId: number) => {
-    const levels = Array.from(
-      new Set(
-        sections
-          .filter((section) => section.program === programId)
-          .map((section) => section.year_level),
-      ),
-    ).sort((a, b) => a - b)
-    return levels.length ? levels.map((level) => `Year ${level}`).join(', ') : 'No sections yet'
+
+  const sectionDisplayLabel = (section: Section) => {
+    const programName = programLabel(section.program)
+    const semesterLabel =
+      section.semester === 1 ? '1st Semester' : section.semester === 2 ? '2nd Semester' : 'Summer'
+    return `${programName} Year ${section.year_level} - ${semesterLabel}`
   }
 
   return (
@@ -317,13 +359,66 @@ export function AdminPage() {
             </option>
           ))}
         </select>
-        <input placeholder="Program Adviser" value={programAdviser} onChange={(e) => setProgramAdviser(e.target.value)} />
-        <input placeholder="School Dean" value={programDean} onChange={(e) => setProgramDean(e.target.value)} />
+        <input placeholder="Program Adviser (optional)" value={programAdviser} onChange={(e) => setProgramAdviser(e.target.value)} />
+        <input placeholder="School Dean (optional)" value={programDean} onChange={(e) => setProgramDean(e.target.value)} />
         <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <SaveIcon /> {editingProgramId ? 'Update Program' : 'Save Program'}
         </button>
         {editingProgramId && (
           <button type="button" onClick={resetProgramForm}>
+            Cancel Edit
+          </button>
+        )}
+      </form>
+
+      <h2 className="section-title">Program Offerings (Adviser &amp; Dean per Year/Semester)</h2>
+      <form
+        className="form-grid"
+        onSubmit={async (e) => {
+          e.preventDefault()
+          await withFeedback(async () => {
+            const payload = {
+              program: Number(offeringProgram),
+              year_level: Number(offeringYearLevel),
+              semester: Number(offeringSemester),
+              program_adviser: offeringAdviser,
+              school_dean: offeringDean,
+            }
+            if (editingOfferingId) {
+              await api.put(`/program-offerings/${editingOfferingId}/`, payload)
+            } else {
+              await api.post('/program-offerings/', payload)
+            }
+            resetOfferingForm()
+          }, editingOfferingId ? 'Program offering updated.' : 'Program offering created.')
+        }}
+      >
+        <select value={offeringProgram} onChange={(e) => setOfferingProgram(e.target.value)} required>
+          <option value="">Select Program</option>
+          {programs.map((program) => (
+            <option key={program.id} value={program.id}>
+              {program.name}
+            </option>
+          ))}
+        </select>
+        <select value={offeringYearLevel} onChange={(e) => setOfferingYearLevel(e.target.value)}>
+          <option value="1">Year 1</option>
+          <option value="2">Year 2</option>
+          <option value="3">Year 3</option>
+          <option value="4">Year 4</option>
+        </select>
+        <select value={offeringSemester} onChange={(e) => setOfferingSemester(e.target.value)}>
+          <option value="1">1st Semester</option>
+          <option value="2">2nd Semester</option>
+          <option value="3">Summer</option>
+        </select>
+        <input placeholder="Program Adviser" value={offeringAdviser} onChange={(e) => setOfferingAdviser(e.target.value)} />
+        <input placeholder="School Dean" value={offeringDean} onChange={(e) => setOfferingDean(e.target.value)} />
+        <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <SaveIcon /> {editingOfferingId ? 'Update Offering' : 'Save Offering'}
+        </button>
+        {editingOfferingId && (
+          <button type="button" onClick={resetOfferingForm}>
             Cancel Edit
           </button>
         )}
@@ -436,9 +531,6 @@ export function AdminPage() {
                 <tr>
                   <th>Name</th>
                   <th>Department</th>
-                  <th>Program Adviser</th>
-                  <th>School Dean</th>
-                  <th>Year Levels</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -447,9 +539,6 @@ export function AdminPage() {
                   <tr key={program.id}>
                     <td>{program.name}</td>
                     <td>{departmentLabel(program.department)}</td>
-                    <td>{program.program_adviser || '-'}</td>
-                    <td>{program.school_dean || '-'}</td>
-                    <td>{programYearLevelsLabel(program.id)}</td>
                     <td>
                       <button type="button" onClick={() => handleView('Program', program)}>
                         View
@@ -458,6 +547,60 @@ export function AdminPage() {
                         Edit
                       </button>
                       <button type="button" onClick={() => handleDelete('programs', program.id, `Program ${program.name}`)}>
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <details className="admin-folder" open={openFolders.programOfferings} onToggle={(event) => onFolderToggle('programOfferings', event.currentTarget.open)}>
+          <summary>
+            <span className="folder-title">Program Offerings (Program Â· Year Â· Semester)</span>
+            <span className="folder-count">{programOfferings.length}</span>
+          </summary>
+          <div className="folder-body table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Program</th>
+                  <th>Year Level</th>
+                  <th>Semester</th>
+                  <th>Program Adviser</th>
+                  <th>School Dean</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {programOfferings.map((offering) => (
+                  <tr key={offering.id}>
+                    <td>{offering.program_name}</td>
+                    <td>Year {offering.year_level}</td>
+                    <td>
+                      {offering.semester === 1 ? '1st Semester' : offering.semester === 2 ? '2nd Semester' : 'Summer'}
+                    </td>
+                    <td>{offering.program_adviser || '-'}</td>
+                    <td>{offering.school_dean || '-'}</td>
+                    <td>
+                      <button type="button" onClick={() => handleView('Program Offering', offering)}>
+                        View
+                      </button>
+                      <button type="button" onClick={() => startEditOffering(offering)}>
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDelete(
+                            'program-offerings',
+                            offering.id,
+                            `${offering.program_name} Year ${offering.year_level} - Sem ${offering.semester}`,
+                          )
+                        }
+                      >
                         Delete
                       </button>
                     </td>
@@ -517,19 +660,35 @@ export function AdminPage() {
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Program</th>
+                  <th>Program / Year / Semester</th>
                   <th>Year Level</th>
                   <th>Semester</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {sections.map((section) => (
+                {sections
+                  .slice()
+                  .sort((a, b) => {
+                    const programA = programLabel(a.program).toLowerCase()
+                    const programB = programLabel(b.program).toLowerCase()
+                    if (programA !== programB) return programA.localeCompare(programB)
+                    if (a.year_level !== b.year_level) return a.year_level - b.year_level
+                    if (a.semester !== b.semester) return a.semester - b.semester
+                    return a.name.localeCompare(b.name)
+                  })
+                  .map((section) => (
                   <tr key={section.id}>
                     <td>{section.name}</td>
-                    <td>{programLabel(section.program)}</td>
+                    <td>{sectionDisplayLabel(section)}</td>
                     <td>{section.year_level}</td>
-                    <td>{section.semester}</td>
+                    <td>
+                      {section.semester === 1
+                        ? '1st Semester'
+                        : section.semester === 2
+                        ? '2nd Semester'
+                        : 'Summer'}
+                    </td>
                     <td>
                       <button type="button" onClick={() => handleView('Section', section)}>
                         View

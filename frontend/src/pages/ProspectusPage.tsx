@@ -25,6 +25,8 @@ type ProspectusEntry = {
   academic_year: string
   section: number | null
   prerequisite: number | null
+  time: string
+  room: string
 }
 
 type Section = {
@@ -44,6 +46,28 @@ const buildAcademicYearOptions = () => {
 }
 
 const PROSPECTUS_FOLDERS_STORAGE_KEY = 'ccb_prospectus_folders_open_state'
+const SUBJECT_TIME_OPTIONS = [
+  'MWF 7:00-8:00',
+  'MWF 8:01-9:00',
+  'MWF 9:01-10:00',
+  'MWF 10:01-11:00',
+  'MWF 11:01-12:00',
+  'MWF 1:01-2:00',
+  'MWF 2:01-3:00',
+  'MWF 3:01-4:00',
+  'MWF 4:01-5:00',
+  'MWF 5:30-6:30',
+  'MWF 6:31-7:30',
+  'TTH 7:00-8:30',
+  'TTH 8:31-10:00',
+  'TTH 10:01-11:30',
+  'TTH 1:00-2:30',
+  'TTH 2:31-4:00',
+  'TTH 4:01-5:30',
+  'TTH 5:31-7:00',
+  'TTH 7:01-8:30',
+  'SATURDAY 1:00-4:30',
+]
 
 export function ProspectusPage() {
   const [programs, setPrograms] = useState<Program[]>([])
@@ -57,7 +81,7 @@ export function ProspectusPage() {
   const [editingSubjectId, setEditingSubjectId] = useState<number | null>(null)
 
   const [entryProgram, setEntryProgram] = useState('')
-  const [entrySubjects, setEntrySubjects] = useState<string[]>([''])
+  const [entrySubjects, setEntrySubjects] = useState<Array<{ subject: string; time: string; room: string }>>([{ subject: '', time: '', room: '' }])
   const [entryYearLevel, setEntryYearLevel] = useState('1')
   const [entrySemester, setEntrySemester] = useState('1')
   const [entryAcademicYear, setEntryAcademicYear] = useState('')
@@ -134,7 +158,7 @@ export function ProspectusPage() {
 
   const resetEntryForm = () => {
     setEntryProgram('')
-    setEntrySubjects([''])
+    setEntrySubjects([{ subject: '', time: '', room: '' }])
     setEntryYearLevel('1')
     setEntrySemester('1')
     setEntryAcademicYear('')
@@ -168,15 +192,18 @@ export function ProspectusPage() {
   const submitEntry = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     await withFeedback(async () => {
-      for (const subjectId of entrySubjects) {
+      for (const row of entrySubjects) {
+        if (!row.subject) continue
         const payload = {
           program: Number(entryProgram),
-          subject: Number(subjectId),
+          subject: Number(row.subject),
           year_level: Number(entryYearLevel),
           semester: Number(entrySemester),
           academic_year: entryAcademicYear,
           section: entrySection ? Number(entrySection) : null,
           prerequisite: entryPrerequisite ? Number(entryPrerequisite) : null,
+          time: row.time.trim().toUpperCase(),
+          room: row.room.trim().toUpperCase(),
         }
         if (editingEntryId) {
           await api.put(`/prospectus/${editingEntryId}/`, payload)
@@ -218,6 +245,7 @@ export function ProspectusPage() {
   }
 
   const startEditSubject = (subject: Subject) => {
+    resetEntryForm()
     setSubjectCode(subject.code)
     setSubjectTitle(subject.title)
     setSubjectUnits(subject.units)
@@ -225,8 +253,9 @@ export function ProspectusPage() {
   }
 
   const startEditEntry = (entry: ProspectusEntry) => {
+    resetSubjectForm()
     setEntryProgram(String(entry.program))
-    setEntrySubjects([String(entry.subject)])
+    setEntrySubjects([{ subject: String(entry.subject), time: entry.time || '', room: entry.room || '' }])
     setEntryYearLevel(String(entry.year_level))
     setEntrySemester(String(entry.semester))
     setEntryAcademicYear(entry.academic_year || '')
@@ -285,6 +314,20 @@ export function ProspectusPage() {
     if (!query) return true
     return subject.code.toLowerCase().includes(query) || subject.title.toLowerCase().includes(query)
   })
+  const subjectPlacementLabel = (subjectId: number) => {
+    const placements = Array.from(
+      new Set(
+        entries
+          .filter((entry) => entry.subject === subjectId)
+          .sort((a, b) => {
+            if (a.year_level !== b.year_level) return a.year_level - b.year_level
+            return a.semester - b.semester
+          })
+          .map((entry) => `Year ${entry.year_level} - ${semesterLabel(entry.semester)}`),
+      ),
+    )
+    return placements.length ? placements.join(', ') : '-'
+  }
   const academicYearFilterOptions = Array.from(new Set(entries.map((entry) => entry.academic_year).filter(Boolean))).sort((a, b) =>
     b.localeCompare(a),
   )
@@ -329,8 +372,14 @@ export function ProspectusPage() {
       {viewDetails && <p>{viewDetails}</p>}
 
       <h2 className="section-title">Create Subject</h2>
-      <form className="form-grid" onSubmit={submitSubject}>
-        <input placeholder="Subject Code" value={subjectCode} onChange={(e) => setSubjectCode(e.target.value)} required />
+      <form className="form-grid prospectus-subject-form" onSubmit={submitSubject}>
+        <input
+          className="prospectus-subject-code-input"
+          placeholder="Subject Code"
+          value={subjectCode}
+          onChange={(e) => setSubjectCode(e.target.value.toUpperCase())}
+          required
+        />
         <input placeholder="Subject Title" value={subjectTitle} onChange={(e) => setSubjectTitle(e.target.value)} required />
         <input placeholder="Units" value={subjectUnits} onChange={(e) => setSubjectUnits(e.target.value)} required />
         <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
@@ -344,7 +393,7 @@ export function ProspectusPage() {
       </form>
 
       <h2 className="section-title">Create Prospectus Mapping</h2>
-      <form className="form-grid" onSubmit={submitEntry}>
+      <form className="form-grid prospectus-mapping-form" onSubmit={submitEntry}>
         <select value={entryProgram} onChange={(e) => setEntryProgram(e.target.value)} required>
           <option value="">Select Program</option>
           {programs.map((program) => (
@@ -355,41 +404,63 @@ export function ProspectusPage() {
         </select>
 
         {/* Multiple Subject Selectors */}
-        {entrySubjects.map((subject, idx) => (
-          <select
-            key={idx}
-            value={subject}
-            onChange={(e) => {
-              const newSubjects = [...entrySubjects]
-              newSubjects[idx] = e.target.value
-              setEntrySubjects(newSubjects)
-            }}
-            required
-          >
-            <option value="">Select Subject</option>
-            {subjects.map((subject) => (
-              <option key={subject.id} value={subject.id}>
-                {subject.code} - {subject.title}
-              </option>
-            ))}
-          </select>
+        {entrySubjects.map((row, idx) => (
+          <div key={idx} className="prospectus-entry-row">
+            <select
+              value={row.subject}
+              onChange={(e) => {
+                const newRows = [...entrySubjects]
+                newRows[idx] = { ...newRows[idx], subject: e.target.value }
+                setEntrySubjects(newRows)
+              }}
+              required
+            >
+              <option value="">Select Subject</option>
+              {subjects.map((subject) => (
+                <option key={subject.id} value={subject.id}>
+                  {subject.code} - {subject.title}
+                </option>
+              ))}
+            </select>
+            <input
+              list="prospectus-subject-time-options"
+              placeholder="Time (e.g. MWF 7:00-8:00)"
+              value={row.time}
+              onChange={(e) => {
+                const newRows = [...entrySubjects]
+                newRows[idx] = { ...newRows[idx], time: e.target.value.toUpperCase() }
+                setEntrySubjects(newRows)
+              }}
+            />
+            <input
+              placeholder="Room"
+              value={row.room}
+              onChange={(e) => {
+                const newRows = [...entrySubjects]
+                newRows[idx] = { ...newRows[idx], room: e.target.value.toUpperCase() }
+                setEntrySubjects(newRows)
+              }}
+            />
+          </div>
         ))}
-        <button
-          type="button"
-          onClick={() => setEntrySubjects([...entrySubjects, ''])}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '8px' }}
-        >
-          <AddIcon /> Add Another Subject
-        </button>
-        {entrySubjects.length > 1 && (
+        <div className="prospectus-entry-actions">
           <button
             type="button"
-            onClick={() => setEntrySubjects(entrySubjects.slice(0, -1))}
-            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '8px' }}
+            onClick={() => setEntrySubjects([...entrySubjects, { subject: '', time: '', room: '' }])}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
           >
-            <RemoveIcon /> Remove Last Subject
+            <AddIcon /> Add Another Subject
           </button>
-        )}
+          {entrySubjects.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setEntrySubjects(entrySubjects.slice(0, -1))}
+              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              <RemoveIcon /> Remove Last Subject
+            </button>
+          )}
+        </div>
 
         <select value={entryYearLevel} onChange={(e) => setEntryYearLevel(e.target.value)}>
           <option value="1">Year 1</option>
@@ -440,6 +511,11 @@ export function ProspectusPage() {
           </button>
         )}
       </form>
+      <datalist id="prospectus-subject-time-options">
+        {SUBJECT_TIME_OPTIONS.map((timeOption) => (
+          <option key={timeOption} value={timeOption} />
+        ))}
+      </datalist>
 
       <h2 className="section-title">Copy Prospectus by Section</h2>
       <form className="form-grid" onSubmit={submitCopySection}>
@@ -511,6 +587,7 @@ export function ProspectusPage() {
             <tr>
               <th>Code</th>
               <th>Title</th>
+              <th>Identifier</th>
               <th>Units</th>
               <th>Actions</th>
             </tr>
@@ -520,6 +597,7 @@ export function ProspectusPage() {
               <tr key={subject.id}>
                 <td>{subject.code}</td>
                 <td>{subject.title}</td>
+                <td>{subjectPlacementLabel(subject.id)}</td>
                 <td>{subject.units}</td>
                 <td>
                   <button type="button" onClick={() => handleView('Subject', subject)}>
@@ -536,7 +614,7 @@ export function ProspectusPage() {
             ))}
             {!filteredSubjects.length && (
               <tr>
-                <td colSpan={4}>No subjects found for the current search.</td>
+                <td colSpan={5}>No subjects found for the current search.</td>
               </tr>
             )}
           </tbody>
@@ -612,6 +690,8 @@ export function ProspectusPage() {
                         <th>Program</th>
                         <th>Subject</th>
                         <th>Prerequisite</th>
+                        <th>Time</th>
+                        <th>Room</th>
                         <th>Actions</th>
                       </tr>
                     </thead>
@@ -621,6 +701,8 @@ export function ProspectusPage() {
                           <td>{programLabel(entry.program)}</td>
                           <td>{subjectLabel(entry.subject)}</td>
                           <td>{subjectLabel(entry.prerequisite)}</td>
+                          <td>{entry.time || '-'}</td>
+                          <td>{entry.room || '-'}</td>
                           <td>
                             <button type="button" onClick={() => handleView('ProspectusEntry', entry)}>
                               View

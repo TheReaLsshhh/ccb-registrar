@@ -1,6 +1,9 @@
-﻿from django.db import transaction
+from collections import defaultdict
 
-from .models import AcademicTerm, ProspectusEntry, Student, StudentLoad
+from django.db import transaction
+from django.db.models import Count
+
+from .models import AcademicHistory, AcademicTerm, ProspectusEntry, Student, StudentLoad
 
 
 def _has_passed_prerequisite(student, prerequisite_subject):
@@ -67,3 +70,58 @@ def auto_load_students(student_ids, term_id):
                 if was_created:
                     created += 1
     return {'created_load_rows': created}
+
+
+def get_students_with_multiple_academic_history(limit=None):
+    duplicate_rows = list(
+        AcademicHistory.objects.values(
+            'student_id',
+            'student__student_id',
+            'student__first_name',
+            'student__last_name',
+        )
+        .annotate(history_count=Count('id'))
+        .filter(history_count__gt=1)
+        .order_by('-history_count', 'student__student_id')[:limit]
+    )
+
+    if not duplicate_rows:
+        return []
+
+    student_ids = [row['student_id'] for row in duplicate_rows]
+    history_rows = (
+        AcademicHistory.objects.filter(student_id__in=student_ids)
+        .select_related('program', 'section')
+        .order_by('student__student_id', 'academic_year', 'semester', 'id')
+    )
+
+    histories_by_student = defaultdict(list)
+    for history in history_rows:
+        histories_by_student[history.student_id].append(
+            {
+                'id': history.id,
+                'academic_year': history.academic_year,
+                'semester': history.semester,
+                'year_level': history.year_level,
+                'status': history.status,
+                'program_name': history.program.name,
+                'section_name': history.section.name if history.section else '',
+            }
+        )
+
+    results = []
+    for row in duplicate_rows:
+        results.append(
+            {
+                'student_pk': row['student_id'],
+                'student_id': row['student__student_id'],
+                'student_name': ' '.join(
+                    part
+                    for part in [row['student__first_name'], row['student__last_name']]
+                    if part
+                ),
+                'history_count': row['history_count'],
+                'histories': histories_by_student[row['student_id']],
+            }
+        )
+    return results
