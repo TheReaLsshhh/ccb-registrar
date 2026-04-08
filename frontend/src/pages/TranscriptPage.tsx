@@ -191,7 +191,7 @@ export function TranscriptPage() {
                     <div className="transcript-doc-section-title">Personal Data</div>
                     <div className="transcript-doc-info-grid">
                       <div><span>Name:</span> {fullName}</div>
-                      <div><span>Student No.:</span> {student.student_id}</div>
+                      <div><span>Student Number:</span> {student.student_id}</div>
                       <div><span>Date of Birth:</span> {student.date_of_birth || '-'}</div>
                       <div><span>Gender:</span> {student.gender || '-'}</div>
                       <div><span>Nationality:</span> {student.nationality || '-'}</div>
