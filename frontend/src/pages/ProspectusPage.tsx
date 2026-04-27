@@ -1,7 +1,8 @@
-﻿import { FormEvent, useEffect, useState } from 'react'
+﻿import { FormEvent, useEffect, useMemo, useState } from 'react'
 
 import { api, getErrorMessage } from '../api'
-import { AddIcon, ChevronDownIcon, FolderIcon, RemoveIcon, SaveIcon } from '../components/Icons'
+import { hasAcademicTermForSelection } from '../lib/registrarWorkflow'
+import { AddIcon, ChevronDownIcon, FolderIcon, ProspectusIcon, RemoveIcon, SaveIcon } from '../components/Icons'
 
 type Program = {
   id: number
@@ -35,6 +36,13 @@ type Section = {
   program: number
   year_level: number
   semester: number
+}
+
+type AcademicTerm = {
+  id: number
+  year_label: string
+  semester: number
+  is_active: boolean
 }
 
 const buildAcademicYearOptions = () => {
@@ -74,6 +82,7 @@ export function ProspectusPage() {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [sections, setSections] = useState<Section[]>([])
   const [entries, setEntries] = useState<ProspectusEntry[]>([])
+  const [terms, setTerms] = useState<AcademicTerm[]>([])
 
   const [subjectCode, setSubjectCode] = useState('')
   const [subjectTitle, setSubjectTitle] = useState('')
@@ -92,6 +101,7 @@ export function ProspectusPage() {
   const [copyYearLevel, setCopyYearLevel] = useState('1')
   const [copySemester, setCopySemester] = useState('1')
   const [copyAcademicYear, setCopyAcademicYear] = useState('')
+  const [copyTargetAcademicYear, setCopyTargetAcademicYear] = useState('')
   const [copySourceSection, setCopySourceSection] = useState('')
   const [copyTargetSection, setCopyTargetSection] = useState('')
   const [filterSection, setFilterSection] = useState('all')
@@ -116,17 +126,36 @@ export function ProspectusPage() {
 
   const academicYearOptions = buildAcademicYearOptions()
 
+  const mappingTermMismatch = useMemo(
+    () =>
+      Boolean(entryAcademicYear) &&
+      Boolean(entrySemester) &&
+      !hasAcademicTermForSelection(terms, entryAcademicYear, entrySemester),
+    [terms, entryAcademicYear, entrySemester],
+  )
+
+  const copyEffectiveTargetAcademicYear = copyTargetAcademicYear.trim() || copyAcademicYear
+  const copyTermMismatch = useMemo(
+    () =>
+      Boolean(copyEffectiveTargetAcademicYear) &&
+      Boolean(copySemester) &&
+      !hasAcademicTermForSelection(terms, copyEffectiveTargetAcademicYear, copySemester),
+    [terms, copyEffectiveTargetAcademicYear, copySemester],
+  )
+
   const loadData = async () => {
-    const [programResp, subjectResp, sectionResp, entryResp] = await Promise.all([
+    const [programResp, subjectResp, sectionResp, entryResp, termResp] = await Promise.all([
       api.get<Program[]>('/programs/'),
       api.get<Subject[]>('/subjects/'),
       api.get<Section[]>('/sections/'),
       api.get<ProspectusEntry[]>('/prospectus/'),
+      api.get<AcademicTerm[]>('/terms/'),
     ])
     setPrograms(programResp.data)
     setSubjects(subjectResp.data)
     setSections(sectionResp.data)
     setEntries(entryResp.data)
+    setTerms(termResp.data)
   }
 
   useEffect(() => {
@@ -172,6 +201,7 @@ export function ProspectusPage() {
     setCopyYearLevel('1')
     setCopySemester('1')
     setCopyAcademicYear('')
+    setCopyTargetAcademicYear('')
     setCopySourceSection('')
     setCopyTargetSection('')
   }
@@ -231,6 +261,9 @@ export function ProspectusPage() {
         year_level: Number(copyYearLevel),
         semester: Number(copySemester),
         academic_year: copyAcademicYear,
+        ...(copyTargetAcademicYear.trim()
+          ? { target_academic_year: copyTargetAcademicYear.trim() }
+          : {}),
         source_section: Number(copySourceSection),
         target_section: Number(copyTargetSection),
       })
@@ -363,9 +396,19 @@ export function ProspectusPage() {
   }
 
   return (
-    <section className="card">
-      <h1>Prospectus Module</h1>
-      <p>Define subjects, prerequisites, and semester mapping.</p>
+    <section className="card prospectus-page">
+      <header className="prospectus-page-header">
+        <h1 className="prospectus-page-title">
+          <ProspectusIcon aria-hidden />
+          <span>Prospectus Module</span>
+        </h1>
+        <p className="prospectus-page-lede">Define subjects, prerequisites, and semester mapping.</p>
+      </header>
+      <p className="workflow-route-hint">
+        Use the same <strong>School Year</strong> and <strong>Semester</strong> as in <strong>Admin → Create Academic Term</strong> so
+        Continuing enrollment can match sections and terms. <strong>Admin → Program Offerings</strong> supplies adviser and dean names for
+        each program, year level, and semester; Continuing uses those when the form matches that row.
+      </p>
 
       {error && <p className="error-text">{error}</p>}
       {success && <p className="success-text">{success}</p>}
@@ -493,6 +536,13 @@ export function ProspectusPage() {
           ))}
         </select>
 
+        {mappingTermMismatch ? (
+          <p className="workflow-warning" role="status">
+            No academic term matches this school year and semester. Continuing will not list sections for this combination until you add
+            a term under Admin (the year label must match exactly, e.g. 2025-2026).
+          </p>
+        ) : null}
+
         <select value={entryPrerequisite} onChange={(e) => setEntryPrerequisite(e.target.value)}>
           <option value="">No Prerequisite</option>
           {subjects.map((subject) => (
@@ -518,6 +568,12 @@ export function ProspectusPage() {
       </datalist>
 
       <h2 className="section-title">Copy Prospectus by Section</h2>
+      <p className="workflow-route-hint">
+        Copy subject rows from a <strong>source</strong> school year and section into a <strong>target</strong> section. To roll the same
+        section forward for a new school year (for example 2025-2026 → 2026-2027 with the same subjects), set <em>Source school year</em> to
+        the year that already has mappings, set <em>Target school year</em> to the new year, and you may use the same section for both source
+        and target when the target year is different.
+      </p>
       <form className="form-grid" onSubmit={submitCopySection}>
         <select value={copyProgram} onChange={(e) => setCopyProgram(e.target.value)} required>
           <option value="">Select Program</option>
@@ -542,9 +598,18 @@ export function ProspectusPage() {
         </select>
 
         <select value={copyAcademicYear} onChange={(e) => setCopyAcademicYear(e.target.value)} required>
-          <option value="">Select Academic Year</option>
+          <option value="">Source school year</option>
           {academicYearOptions.map((yearLabel) => (
             <option key={yearLabel} value={yearLabel}>
+              {yearLabel}
+            </option>
+          ))}
+        </select>
+
+        <select value={copyTargetAcademicYear} onChange={(e) => setCopyTargetAcademicYear(e.target.value)}>
+          <option value="">Target school year (default: same as source)</option>
+          {academicYearOptions.map((yearLabel) => (
+            <option key={`tgt-${yearLabel}`} value={yearLabel}>
               {yearLabel}
             </option>
           ))}
@@ -567,6 +632,13 @@ export function ProspectusPage() {
             </option>
           ))}
         </select>
+
+        {copyTermMismatch ? (
+          <p className="workflow-warning" role="status">
+            No academic term matches the <strong>target</strong> school year ({copyEffectiveTargetAcademicYear}) and semester for this copy
+            operation. Add the term under Admin first (the year label must match exactly).
+          </p>
+        ) : null}
 
         <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <SaveIcon /> Copy to Section

@@ -3,11 +3,15 @@ import re
 from django.contrib.auth.models import User
 from rest_framework import serializers
 
+from .academic_utils import normalize_academic_year_label
 from .models import (
     AcademicHistory,
+    AcademicHistoryStatus,
     AcademicTerm,
+    ApprovalStatus,
     AuditLog,
     ContinuingFolderStatus,
+    ContinuingFolderStatusValue,
     Department,
     Program,
     ProgramOffering,
@@ -15,12 +19,15 @@ from .models import (
     Section,
     StaffChatConversation,
     StaffChatMessage,
+    StudentLoadStatus,
     Student,
     StudentLoad,
     Subject,
     UserProfile,
+    normalize_choice_value,
+    normalize_semester_value,
 )
-from .services import _prospectus_entries_for_student
+from .services import _prospectus_entries_for_student, consolidate_student_academic_histories
 from .staff_chat import staff_chat_total_unread_for_user, staff_chat_unread_count_for_viewer
 
 
@@ -41,6 +48,12 @@ class AcademicTermSerializer(serializers.ModelSerializer):
         model = AcademicTerm
         fields = '__all__'
 
+    def to_internal_value(self, data):
+        data = data.copy()
+        if 'semester' in data:
+            data['semester'] = normalize_semester_value(data['semester'])
+        return super().to_internal_value(data)
+
 
 class ProgramOfferingSerializer(serializers.ModelSerializer):
     program_name = serializers.CharField(source='program.name', read_only=True)
@@ -49,6 +62,12 @@ class ProgramOfferingSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProgramOffering
         fields = ['id', 'program', 'program_name', 'department_name', 'year_level', 'semester', 'program_adviser', 'school_dean']
+
+    def to_internal_value(self, data):
+        data = data.copy()
+        if 'semester' in data:
+            data['semester'] = normalize_semester_value(data['semester'])
+        return super().to_internal_value(data)
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -73,7 +92,7 @@ class SectionSerializer(serializers.ModelSerializer):
                 offering, _ = ProgramOffering.objects.get_or_create(
                     program_id=int(program_id),
                     year_level=int(year_level),
-                    semester=int(semester),
+                    semester=normalize_semester_value(semester),
                     defaults={'program_adviser': '', 'school_dean': ''},
                 )
                 program_offering = offering
@@ -92,7 +111,7 @@ class SectionSerializer(serializers.ModelSerializer):
                 offering, _ = ProgramOffering.objects.get_or_create(
                     program_id=int(program_id),
                     year_level=int(year_level),
-                    semester=int(semester),
+                    semester=normalize_semester_value(semester),
                     defaults={'program_adviser': '', 'school_dean': ''},
                 )
                 program_offering = offering
@@ -113,6 +132,12 @@ class ProspectusEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = ProspectusEntry
         fields = '__all__'
+
+    def to_internal_value(self, data):
+        data = data.copy()
+        if 'semester' in data:
+            data['semester'] = normalize_semester_value(data['semester'])
+        return super().to_internal_value(data)
 
     def validate_time(self, value):
         normalized = (value or '').strip().upper()
@@ -159,11 +184,26 @@ class StudentSerializer(serializers.ModelSerializer):
         model = Student
         fields = '__all__'
 
+    def to_internal_value(self, data):
+        data = data.copy()
+        for field in ('adviser_approval_status', 'dean_approval_status'):
+            if field in data:
+                data[field] = normalize_choice_value(data[field], ApprovalStatus)
+        if 'semester' in data:
+            data['semester'] = normalize_semester_value(data['semester'])
+        return super().to_internal_value(data)
+
 
 class StudentLoadSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentLoad
         fields = '__all__'
+
+    def to_internal_value(self, data):
+        data = data.copy()
+        if 'status' in data:
+            data['status'] = normalize_choice_value(data['status'], StudentLoadStatus)
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         student = attrs.get('student') or getattr(self.instance, 'student', None)
@@ -200,6 +240,37 @@ class AcademicHistorySerializer(serializers.ModelSerializer):
         model = AcademicHistory
         fields = '__all__'
 
+    def to_internal_value(self, data):
+        data = data.copy()
+        for field in ('adviser_approval_status', 'dean_approval_status'):
+            if field in data:
+                data[field] = normalize_choice_value(data[field], ApprovalStatus)
+        if 'status' in data:
+            data['status'] = normalize_choice_value(data['status'], AcademicHistoryStatus)
+        if 'semester' in data:
+            data['semester'] = normalize_semester_value(data['semester'])
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if 'academic_year' in attrs:
+            attrs['academic_year'] = normalize_academic_year_label(attrs['academic_year'])
+        return attrs
+
+    def create(self, validated_data):
+        student = validated_data.pop('student')
+        semester = validated_data.pop('semester')
+        academic_year = normalize_academic_year_label(validated_data.pop('academic_year', '') or '')
+        consolidate_student_academic_histories(student)
+        validated_data['academic_year'] = academic_year
+        instance, _ = AcademicHistory.objects.update_or_create(
+            student=student,
+            academic_year=academic_year,
+            semester=semester,
+            defaults=validated_data,
+        )
+        return instance
+
 
 class ContinuingFolderStatusSerializer(serializers.ModelSerializer):
     program_name = serializers.CharField(source='program.name', read_only=True)
@@ -208,6 +279,9 @@ class ContinuingFolderStatusSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ContinuingFolderStatus
+        # Upsert via ContinuingViewSet.folder_statuses uses update_or_create on the natural key.
+        # Suppress UniqueTogetherValidator so POST is not rejected when a row already exists.
+        validators = []
         fields = [
             'id',
             'program',
@@ -225,6 +299,14 @@ class ContinuingFolderStatusSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = ['updated_by', 'completed_at', 'created_at', 'updated_at']
+
+    def to_internal_value(self, data):
+        data = data.copy()
+        if 'status' in data:
+            data['status'] = normalize_choice_value(data['status'], ContinuingFolderStatusValue)
+        if 'semester' in data:
+            data['semester'] = normalize_semester_value(data['semester'])
+        return super().to_internal_value(data)
 
 
 class StudentDetailSerializer(serializers.ModelSerializer):

@@ -36,7 +36,7 @@ const navItems: { path: string; label: string; icon: ComponentType; statusTag?: 
   { path: '/prospectus', label: 'Prospectus', icon: ProspectusIcon },
   { path: '/enrollment', label: 'Enrollment', icon: EnrollmentIcon },
   { path: '/continuing', label: 'Continuing', icon: ContinuingIcon },
-  { path: '/transcript', label: 'Transcript', icon: TORIcon, statusTag: 'Working' },
+  { path: '/transcript', label: 'Transcript', icon: TORIcon },
   { path: '/chat', label: 'Staff Chat', icon: StaffChatIcon },
 ]
 
@@ -285,12 +285,178 @@ export function AppShell() {
   const locationPathnameRef = useRef(location.pathname)
   /** When the WS path already showed a banner + desktop alert, skip duplicate from unread counter bump. */
   const staffChatSkipUnreadToastRef = useRef(false)
+  /** Snapshot of `document.title` for restoring after staff-chat tab alerts. */
+  const staffChatBaseDocumentTitleRef = useRef<string | null>(null)
+  /** Last staff-chat title fragment while the tab was hidden; cleared when the tab is focused again. */
+  const staffChatTitleAlertFragmentRef = useRef<string | null>(null)
+  const staffChatToastRef = useRef<StaffChatToastState | null>(null)
+  const staffChatUnreadTotalRef = useRef(0)
+  /** Latest document-title sync (avoids re-subscribing on every /me/ poll tick). */
+  const staffChatApplyDocumentTitleRef = useRef<(() => void) | null>(null)
   /** Throttle POST /me/staff-activity/ from pointer/key (route changes bypass throttle). */
   const staffPresenceThrottleRef = useRef(0)
+
+  const authedRef = useRef(authed)
+  useEffect(() => {
+    authedRef.current = authed
+  }, [authed])
 
   useEffect(() => {
     locationPathnameRef.current = location.pathname
   }, [location.pathname])
+
+  useEffect(() => {
+    if (staffChatBaseDocumentTitleRef.current === null) {
+      staffChatBaseDocumentTitleRef.current = (typeof document !== 'undefined' && document.title?.trim())
+        ? document.title
+        : 'CCB Local Registrar System'
+    }
+  }, [])
+
+  useEffect(() => {
+    staffChatToastRef.current = staffChatToast
+  }, [staffChatToast])
+
+  useEffect(() => {
+    staffChatUnreadTotalRef.current = staffChatUnreadTotal
+  }, [staffChatUnreadTotal])
+
+  useEffect(() => {
+    if (!staffChatToast) return
+    const fragment =
+      staffChatToast.mode === 'incoming'
+        ? truncateBannerText(staffChatToast.headline, 52)
+        : staffChatToast.delta === 1
+          ? 'New staff chat message'
+          : `${staffChatToast.delta} new staff chat messages`
+    staffChatTitleAlertFragmentRef.current = fragment
+  }, [staffChatToast])
+
+  useEffect(() => {
+    if (staffChatUnreadTotal === 0) {
+      staffChatTitleAlertFragmentRef.current = null
+    }
+  }, [staffChatUnreadTotal])
+
+  useEffect(() => {
+    const base = staffChatBaseDocumentTitleRef.current
+    if (!base || typeof document === 'undefined') return
+
+    const fragmentFromToast = (toast: StaffChatToastState): string =>
+      toast.mode === 'incoming'
+        ? truncateBannerText(toast.headline, 52)
+        : toast.delta === 1
+          ? 'New staff chat message'
+          : `${toast.delta} new staff chat messages`
+
+    const computeHiddenTabAlertFragment = (): string | null => {
+      const toast = staffChatToastRef.current
+      if (toast) return fragmentFromToast(toast)
+      const pending = staffChatTitleAlertFragmentRef.current
+      const unread = staffChatUnreadTotalRef.current
+      if (pending && unread > 0) return pending
+      if (unread > 0) {
+        return unread === 1 ? '(1) Staff Chat' : `(${unread}) Staff Chat messages`
+      }
+      return null
+    }
+
+    let blinkInterval: number | null = null
+    let blinkHigh = false
+
+    const clearBlink = () => {
+      if (blinkInterval != null) {
+        window.clearInterval(blinkInterval)
+        blinkInterval = null
+      }
+      blinkHigh = false
+    }
+
+    const applyStaffChatDocumentTitle = () => {
+      if (!authedRef.current) {
+        clearBlink()
+        document.title = base
+        return
+      }
+      const tabHidden = document.visibilityState === 'hidden'
+
+      if (!tabHidden) {
+        clearBlink()
+        staffChatTitleAlertFragmentRef.current = null
+        if (pathnameIsStaffChat(locationPathnameRef.current)) {
+          document.title = base
+          return
+        }
+        const toast = staffChatToastRef.current
+        if (toast) {
+          document.title = `${fragmentFromToast(toast)} | ${base}`
+          return
+        }
+        document.title = base
+        return
+      }
+
+      const fragment = computeHiddenTabAlertFragment()
+      if (fragment == null) {
+        clearBlink()
+        document.title = base
+        return
+      }
+
+      const tick = () => {
+        if (!authedRef.current) {
+          clearBlink()
+          document.title = base
+          return
+        }
+        if (document.visibilityState !== 'hidden') {
+          clearBlink()
+          queueMicrotask(() => {
+            staffChatApplyDocumentTitleRef.current?.()
+          })
+          return
+        }
+        const f = computeHiddenTabAlertFragment()
+        if (f == null) {
+          clearBlink()
+          document.title = base
+          return
+        }
+        blinkHigh = !blinkHigh
+        document.title = blinkHigh ? `${f} | ${base}` : base
+      }
+
+      clearBlink()
+      blinkHigh = false
+      tick()
+      blinkInterval = window.setInterval(tick, 1_600)
+    }
+
+    staffChatApplyDocumentTitleRef.current = applyStaffChatDocumentTitle
+
+    if (!authed) {
+      applyStaffChatDocumentTitle()
+      return () => {
+        staffChatApplyDocumentTitleRef.current = null
+        clearBlink()
+      }
+    }
+
+    applyStaffChatDocumentTitle()
+    document.addEventListener('visibilitychange', applyStaffChatDocumentTitle)
+    window.addEventListener('focus', applyStaffChatDocumentTitle)
+    return () => {
+      staffChatApplyDocumentTitleRef.current = null
+      clearBlink()
+      document.removeEventListener('visibilitychange', applyStaffChatDocumentTitle)
+      window.removeEventListener('focus', applyStaffChatDocumentTitle)
+    }
+  }, [authed])
+
+  useEffect(() => {
+    if (!authed) return
+    staffChatApplyDocumentTitleRef.current?.()
+  }, [authed, staffChatToast, staffChatUnreadTotal, location.pathname])
 
   useEffect(() => {
     staffChatWsEligibleRef.current = staffChatWsEligible
@@ -299,11 +465,6 @@ export function AppShell() {
   useEffect(() => {
     meIdRef.current = meId
   }, [meId])
-
-  const authedRef = useRef(authed)
-  useEffect(() => {
-    authedRef.current = authed
-  }, [authed])
 
   /** Real UI activity only — GET /me/ polling must not refresh presence (or users never go Away). */
   useEffect(() => {
@@ -538,7 +699,11 @@ export function AppShell() {
             if (parsed && myId != null && parsed.sender_id === myId) {
               return
             }
-            if (parsed && myId != null && parsed.sender_id !== myId && !pathnameIsStaffChat(locationPathnameRef.current)) {
+            const tabHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+            const awayFromChatUi =
+              !pathnameIsStaffChat(locationPathnameRef.current) ||
+              tabHidden
+            if (parsed && myId != null && parsed.sender_id !== myId && awayFromChatUi) {
               staffChatSkipUnreadToastRef.current = true
               const { headline, detail } = staffChatIncomingBannerCopy(parsed)
               setStaffChatToast({
@@ -558,13 +723,17 @@ export function AppShell() {
             const conversationId = typeof data.conversation_id === 'number' ? data.conversation_id : 0
             const emoji = typeof data.emoji === 'string' ? data.emoji.trim() : ''
             const actorUsername = typeof data.actor_username === 'string' ? data.actor_username : undefined
+            const tabHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+            const awayFromChatUi =
+              !pathnameIsStaffChat(locationPathnameRef.current) ||
+              tabHidden
             if (
               myId != null &&
               actorId != null &&
               targetSenderId === myId &&
               actorId !== myId &&
               emoji &&
-              !pathnameIsStaffChat(locationPathnameRef.current)
+              awayFromChatUi
             ) {
               const { headline, detail } = staffChatReactionBannerCopy(actorUsername, emoji)
               setStaffChatToast({
@@ -573,8 +742,8 @@ export function AppShell() {
                 headline,
                 detail,
               })
-              const desk = `${headline}${detail ? ` â€” ${detail}` : ''}`
-              void tryShowStaffChatDesktopNotification(1, desk.length > 200 ? `${desk.slice(0, 197)}â€¦` : desk)
+              const desk = `${headline}${detail ? ` — ${detail}` : ''}`
+              void tryShowStaffChatDesktopNotification(1, desk.length > 200 ? `${desk.slice(0, 197)}…` : desk)
             }
           }
           void refreshStaffChatUnreadFromServer()
@@ -659,7 +828,8 @@ export function AppShell() {
       return
     }
 
-    if (staffChatUnreadTotal > prev && !onStaffChatPage) {
+    const tabHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    if (staffChatUnreadTotal > prev && (!onStaffChatPage || tabHidden)) {
       const delta = staffChatUnreadTotal - prev
       if (staffChatSkipUnreadToastRef.current) {
         staffChatSkipUnreadToastRef.current = false
@@ -859,8 +1029,10 @@ export function AppShell() {
       {isMobile && isMobileMenuOpen && <button className="sidebar-overlay" onClick={() => setIsMobileMenuOpen(false)} aria-label="Close menu" />}
 
       <aside className={sidebarClasses}>
-        <div className="sidebar-header">
-          <img src="/ccb_registrar_logo.png" alt="CCB Registrar" className="brand-logo" />
+        <div className="sidebar-top">
+          <div className="sidebar-header">
+            <img src="/ccb_registrar_logo.png" alt="CCB Registrar" className="brand-logo" />
+          </div>
           {!isMobile && (
             <button type="button" onClick={toggleSidebar} className="sidebar-toggle" aria-label="Toggle sidebar">
               <Icon name={isSidebarCollapsed ? 'chevronRight' : 'chevronLeft'} />

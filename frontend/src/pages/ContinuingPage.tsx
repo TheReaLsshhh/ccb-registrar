@@ -4,6 +4,7 @@ import autoTable from 'jspdf-autotable'
 import * as XLSX from 'xlsx-js-style'
 
 import { api, getErrorMessage } from '../api'
+import { hasAcademicTermForSelection, resolveProspectusForContinuing } from '../lib/registrarWorkflow'
 import { ChevronDownIcon, ContinuingIcon, ExcelIcon, FolderIcon, PdfIcon, SearchIcon, TrashBinIcon } from '../components/Icons'
 
 type Program = {
@@ -11,6 +12,17 @@ type Program = {
   code: string
   name: string
   department: number
+  program_adviser: string
+  school_dean: string
+}
+
+type ProgramOffering = {
+  id: number
+  program: number
+  program_name?: string
+  department_name?: string
+  year_level: number
+  semester: number
   program_adviser: string
   school_dean: string
 }
@@ -492,6 +504,7 @@ export function ContinuingPage() {
   const [slipDateOfBirth, setSlipDateOfBirth] = useState<string | null>(null)
   const [departments, setDepartments] = useState<Department[]>([])
   const [programs, setPrograms] = useState<Program[]>([])
+  const [programOfferings, setProgramOfferings] = useState<ProgramOffering[]>([])
   const [sections, setSections] = useState<Section[]>([])
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [prospectusEntries, setProspectusEntries] = useState<ProspectusEntry[]>([])
@@ -591,18 +604,21 @@ export function ContinuingPage() {
   const academicYearOptions = useMemo(buildAcademicYearOptions, [])
 
   const loadReferenceData = async () => {
-    const [departmentResp, programResp, sectionResp, subjectResp, prospectusResp, termResp, studentsResp, folderStatusResp] = await Promise.all([
-      api.get<Department[]>('/departments/'),
-      api.get<Program[]>('/programs/'),
-      api.get<Section[]>('/sections/'),
-      api.get<Subject[]>('/subjects/'),
-      api.get<ProspectusEntry[]>('/prospectus/'),
-      api.get<AcademicTerm[]>('/terms/'),
-      api.get<StudentDetail[]>('/students/'), // Load detailed student data to check continuing status
-      api.get<ContinuingFolderStatus[]>('/continuing/folder-statuses/'),
-    ])
+    const [departmentResp, programResp, offeringResp, sectionResp, subjectResp, prospectusResp, termResp, studentsResp, folderStatusResp] =
+      await Promise.all([
+        api.get<Department[]>('/departments/'),
+        api.get<Program[]>('/programs/'),
+        api.get<ProgramOffering[]>('/program-offerings/'),
+        api.get<Section[]>('/sections/'),
+        api.get<Subject[]>('/subjects/'),
+        api.get<ProspectusEntry[]>('/prospectus/'),
+        api.get<AcademicTerm[]>('/terms/'),
+        api.get<StudentDetail[]>('/students/'), // Load detailed student data to check continuing status
+        api.get<ContinuingFolderStatus[]>('/continuing/folder-statuses/'),
+      ])
     setDepartments(departmentResp.data)
     setPrograms(programResp.data)
+    setProgramOfferings(offeringResp.data)
     setSections(sectionResp.data)
     setSubjects(subjectResp.data)
     setProspectusEntries(prospectusResp.data)
@@ -788,15 +804,34 @@ export function ContinuingPage() {
 
   const selectedProgramData = programs.find((program) => String(program.id) === selectedProgram)
   const selectedSectionData = sections.find((section) => String(section.id) === selectedSection)
-  const resolvedAdviserName = selectedProgramData?.program_adviser || student?.adviser_name || ''
-  const resolvedDeanName = selectedProgramData?.school_dean || student?.dean_name || ''
+  const selectedProgramOffering = useMemo(() => {
+    if (!selectedProgram || !selectedYearLevel || !selectedSemester) return null
+    const pid = Number(selectedProgram)
+    const yl = Number(selectedYearLevel)
+    const sem = Number(selectedSemester)
+    return (
+      programOfferings.find((o) => o.program === pid && o.year_level === yl && o.semester === sem) ?? null
+    )
+  }, [programOfferings, selectedProgram, selectedYearLevel, selectedSemester])
+
+  const pickStaffDisplayName = (offeringVal?: string, programVal?: string, studentVal?: string) =>
+    (offeringVal?.trim() || programVal?.trim() || studentVal?.trim() || '')
+
+  const resolvedAdviserName = pickStaffDisplayName(
+    selectedProgramOffering?.program_adviser,
+    selectedProgramData?.program_adviser,
+    student?.adviser_name,
+  )
+  const resolvedDeanName = pickStaffDisplayName(
+    selectedProgramOffering?.school_dean,
+    selectedProgramData?.school_dean,
+    student?.dean_name,
+  )
 
   const hasRequiredSectionFilters = Boolean(
     selectedProgram && selectedYearLevel && selectedAcademicYear && selectedSemester,
   )
-  const hasMatchingAcademicTerm = terms.some(
-    (term) => term.year_label === selectedAcademicYear && String(term.semester) === selectedSemester,
-  )
+  const hasMatchingAcademicTerm = hasAcademicTermForSelection(terms, selectedAcademicYear, selectedSemester)
   const filteredSections =
     hasRequiredSectionFilters && hasMatchingAcademicTerm
       ? sections.filter(
@@ -820,26 +855,18 @@ export function ContinuingPage() {
     return map
   }, [subjects])
 
-  const resolvedProspectusEntries = useMemo(() => {
-    if (!selectedProgram || !selectedYearLevel || !selectedSemester || !selectedAcademicYear || !selectedSection) return [] as ProspectusEntry[]
-    const exact = prospectusEntries.filter(
-      (entry) =>
-        String(entry.program) === selectedProgram &&
-        String(entry.year_level) === selectedYearLevel &&
-        String(entry.semester) === selectedSemester &&
-        entry.academic_year === selectedAcademicYear &&
-        String(entry.section ?? '') === selectedSection,
-    )
-    if (exact.length) return exact
-    return prospectusEntries.filter(
-      (entry) =>
-        String(entry.program) === selectedProgram &&
-        String(entry.year_level) === selectedYearLevel &&
-        String(entry.semester) === selectedSemester &&
-        entry.academic_year === '' &&
-        entry.section === null,
-    )
-  }, [prospectusEntries, selectedProgram, selectedYearLevel, selectedSemester, selectedAcademicYear, selectedSection])
+  const prospectusResolution = useMemo(
+    () =>
+      resolveProspectusForContinuing(prospectusEntries, {
+        programId: selectedProgram,
+        yearLevel: selectedYearLevel,
+        semester: selectedSemester,
+        academicYear: selectedAcademicYear,
+        sectionId: selectedSection,
+      }),
+    [prospectusEntries, selectedProgram, selectedYearLevel, selectedSemester, selectedAcademicYear, selectedSection],
+  )
+  const resolvedProspectusEntries = prospectusResolution.entries
 
   useEffect(() => {
     setSelectedSection((currentSection) => {
@@ -2051,9 +2078,20 @@ export function ContinuingPage() {
   }
 
   return (
-    <section className="card">
-      <h1>Continuing Module</h1>
-      <p>Manage continuing students and subject loads.</p>
+    <section className="card continuing-page">
+      <header className="continuing-page-header">
+        <h1 className="continuing-page-title">
+          <ContinuingIcon aria-hidden />
+          <span>Continuing Module</span>
+        </h1>
+        <p className="continuing-page-lede">Manage continuing students and subject loads.</p>
+      </header>
+      <p className="workflow-route-hint">
+        <strong>Recommended order:</strong> Admin — <strong>Program Offerings</strong> (Adviser and Dean per program, year level, and
+        semester; these names are what the Continuing form uses first), then academic terms and sections — then Prospectus (subjects and
+        mappings for that program, year, semester, and school year) — then <strong>Process Continuing Student</strong> below. If no
+        offering row matches the selections, names fall back to the student record, then program defaults.
+      </p>
 
       {activeNotification && activeNotificationMeta && (
         <div className="enrollment-notice-overlay" role="presentation">
@@ -2365,6 +2403,85 @@ export function ContinuingPage() {
 
               {student && (
                 <>
+                  <div className="continuing-readiness-panel" role="region" aria-label="Enrollment setup for current selections">
+                    <div className="continuing-readiness-panel-title">Setup check (for selections below)</div>
+                    <ul className="continuing-readiness-list">
+                      <li
+                        className={
+                          !hasRequiredSectionFilters
+                            ? 'continuing-readiness-item is-idle'
+                            : hasMatchingAcademicTerm
+                              ? 'continuing-readiness-item is-ok'
+                              : 'continuing-readiness-item is-warn'
+                        }
+                      >
+                        {!hasRequiredSectionFilters
+                          ? 'Academic term: choose program, year level, school year, and semester to verify.'
+                          : hasMatchingAcademicTerm
+                            ? `Academic term: a term exists for ${selectedAcademicYear} and the selected semester.`
+                            : `Academic term: no term matches "${selectedAcademicYear}" and this semester. Create one under Admin (year label must match exactly, e.g. 2026-2027).`}
+                      </li>
+                      <li
+                        className={
+                          !hasRequiredSectionFilters || !hasMatchingAcademicTerm
+                            ? 'continuing-readiness-item is-idle'
+                            : filteredSections.length
+                              ? 'continuing-readiness-item is-ok'
+                              : 'continuing-readiness-item is-warn'
+                        }
+                      >
+                        {!hasRequiredSectionFilters || !hasMatchingAcademicTerm
+                          ? 'Sections: available after a matching academic term is in place.'
+                          : filteredSections.length
+                            ? 'Sections: at least one section matches this program, year level, and semester.'
+                            : 'Sections: none found for this program, year level, and semester. Add one under Admin.'}
+                      </li>
+                      <li
+                        className={
+                          !selectedProgram || !selectedYearLevel || !selectedSemester
+                            ? 'continuing-readiness-item is-idle'
+                            : selectedProgramOffering
+                              ? 'continuing-readiness-item is-ok'
+                              : 'continuing-readiness-item is-warn'
+                        }
+                      >
+                        {!selectedProgram || !selectedYearLevel || !selectedSemester
+                          ? 'Adviser / dean: choose program, year level, and semester to load names from Program Offerings.'
+                          : selectedProgramOffering
+                            ? 'Adviser / dean: using Program Offerings for this program, year level, and semester (editable anytime in Admin).'
+                            : 'Adviser / dean: no Program Offering row for this program, year level, and semester — add one in Admin, or names fall back to the student record then program defaults.'}
+                      </li>
+                      <li
+                        className={
+                          !hasRequiredSectionFilters || !selectedSection
+                            ? 'continuing-readiness-item is-idle'
+                            : prospectusResolution.mode === 'exact'
+                              ? 'continuing-readiness-item is-ok'
+                              : prospectusResolution.mode === 'template'
+                                ? 'continuing-readiness-item is-warn'
+                                : prospectusResolution.mode === 'empty'
+                                  ? 'continuing-readiness-item is-warn'
+                                  : 'continuing-readiness-item is-idle'
+                        }
+                      >
+                        {!hasRequiredSectionFilters || !selectedSection
+                          ? 'Subject catalog: pick a section to check prospectus mappings.'
+                          : prospectusResolution.mode === 'exact'
+                            ? 'Subject catalog: using section-specific prospectus rows for this school year.'
+                            : prospectusResolution.mode === 'template'
+                              ? 'Subject catalog: no rows for this section and school year — using the program default template (blank school year, no section on Prospectus).'
+                              : prospectusResolution.mode === 'empty'
+                                ? 'Subject catalog: no prospectus rows match (no section match and no default template). Add mappings on Prospectus.'
+                                : 'Subject catalog: incomplete selections.'}
+                      </li>
+                    </ul>
+                    {prospectusResolution.mode === 'template' && hasRequiredSectionFilters && Boolean(selectedSection) ? (
+                      <p className="continuing-readiness-footnote">
+                        If times or subjects should differ by section, add prospectus mappings for this section and school year on the
+                        Prospectus page.
+                      </p>
+                    ) : null}
+                  </div>
                   <div className="sheet-section-title">Student's Information</div>
                   <div className="continuing-grid">
                     <input placeholder="Last Name" value={student.last_name || ''} readOnly />

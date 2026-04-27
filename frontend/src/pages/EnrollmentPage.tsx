@@ -1,9 +1,37 @@
 import { ChangeEvent, CSSProperties, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import * as XLSX from 'xlsx-js-style'
 
 import { api, getErrorMessage } from '../api'
-import { AddUserIcon, ChevronDownIcon, FolderIcon, SearchIcon, TrashBinIcon } from '../components/Icons'
+import { AddUserIcon, ChevronDownIcon, EnrollmentIcon, ExcelIcon, FolderIcon, PdfIcon, SearchIcon, TrashBinIcon } from '../components/Icons'
 
 const ENROLLMENT_FOLDERS_STORAGE_KEY = 'ccb_enrollment_folders_open_state'
+
+const buildContinuingFolderStatusKey = (
+  programId: number,
+  academicYear: string,
+  yearLevel: number,
+  sectionId: number | null,
+  semester: number | null,
+) => `${programId}|${academicYear}|${yearLevel}|${sectionId ?? 'none'}|${semester ?? 'none'}`
+
+type ContinuingFolderStatus = {
+  id: number
+  program: number
+  program_name: string
+  academic_year: string
+  year_level: number
+  semester: number | null
+  section: number | null
+  section_name?: string
+  status: 'ongoing' | 'done'
+  updated_by: number | null
+  updated_by_username?: string
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
 
 const getSemesterLabel = (semester: number | null | undefined): string => {
   if (semester === 1) return '1st Semester'
@@ -74,6 +102,172 @@ type EnrolledStudent = {
   gender: string
   middle_name: string
   semester: number
+  extension_name?: string
+}
+
+type EnrollmentReportGroup = {
+  programName: string
+  academicYear: string
+  yearLevel: number
+  semester: number | null
+  sectionName: string
+  students: EnrolledStudent[]
+}
+
+const REPORT_COLUMNS = ['Student ID', 'Lastname', 'Firstname', 'Middlename', 'Extension name', 'Section', 'Academic Year', 'Semester', 'Year Level', 'Gender'] as const
+
+const semesterLabelForReport = (semester: number | null): string => {
+  if (semester === 1) return '1st Semester'
+  if (semester === 2) return '2nd Semester'
+  if (semester === 3) return 'Summer'
+  return '-'
+}
+
+const buildEnrollmentReportRows = (
+  group: EnrollmentReportGroup,
+  sectionList: Section[],
+): Array<Record<string, string>> => {
+  return group.students.map((s) => {
+    const sectionName =
+      s.section != null ? (sectionList.find((sec) => sec.id === s.section)?.name ?? group.sectionName) : group.sectionName
+    return {
+      'Student ID': s.student_id ?? '',
+      Lastname: s.last_name ?? '',
+      Firstname: s.first_name ?? '',
+      Middlename: s.middle_name ?? '',
+      'Extension name': s.extension_name ?? '',
+      Section: sectionName,
+      'Academic Year': s.academic_year ?? group.academicYear,
+      Semester: semesterLabelForReport(group.semester),
+      'Year Level': String(s.year_level ?? group.yearLevel),
+      Gender: s.gender ?? '',
+    }
+  })
+}
+
+const generateEnrollmentReportPDF = (group: EnrollmentReportGroup, sectionList: Section[]) => {
+  const rows = buildEnrollmentReportRows(group, sectionList)
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+  const margin = 14
+  const pageWidth = doc.internal.pageSize.getWidth()
+  let y = 14
+  doc.setFillColor(11, 31, 58)
+  doc.rect(0, 0, pageWidth, 8, 'F')
+  doc.setTextColor(255, 255, 255)
+  doc.setFontSize(18)
+  doc.setFont('helvetica', 'bold')
+  doc.text('CITY COLLEGE OF BAYAWAN', pageWidth / 2, 5.5, { align: 'center' })
+  doc.setTextColor(0, 0, 0)
+  y = 16
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'normal')
+  doc.text('Government Center, Cabcabon, Banga, Bayawan City', pageWidth / 2, y, { align: 'center' })
+  y += 5
+  doc.setFont('helvetica', 'bold')
+  doc.text('OFFICE OF THE COLLEGE REGISTRAR', pageWidth / 2, y, { align: 'center' })
+  y += 10
+  doc.setDrawColor(11, 31, 58)
+  doc.setLineWidth(0.5)
+  doc.line(margin, y, pageWidth - margin, y)
+  y += 8
+  doc.setFontSize(12)
+  doc.text('ENROLLED STUDENTS REPORT', pageWidth / 2, y, { align: 'center' })
+  y += 7
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  const subtitle = `${group.programName} | ${group.academicYear} | Year ${group.yearLevel} | Section ${group.sectionName} | ${semesterLabelForReport(group.semester)}`
+  doc.text(subtitle, pageWidth / 2, y, { align: 'center' })
+  y += 5
+  doc.setFontSize(8)
+  doc.setTextColor(100, 100, 100)
+  doc.text(`Generated: ${new Date().toLocaleDateString()}`, pageWidth / 2, y, { align: 'center' })
+  doc.setTextColor(0, 0, 0)
+  y += 10
+  const head = [[...REPORT_COLUMNS]]
+  const body = rows.map((r) => REPORT_COLUMNS.map((col) => r[col] ?? ''))
+  autoTable(doc, {
+    head,
+    body,
+    startY: y,
+    theme: 'striped',
+    headStyles: { fillColor: [11, 31, 58], textColor: 255, fontSize: 9 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    margin: { left: margin, right: margin },
+    styles: { fontSize: 8 },
+  })
+  const safeName = `${group.programName.replace(/[^a-z0-9]/gi, '_')}_${group.academicYear}_Year${group.yearLevel}_${group.sectionName}`.slice(0, 80)
+  doc.save(`Enrollment_Report_${safeName}.pdf`)
+}
+
+const HEADER_FILL = '0B1F3A'
+const HEADER_TEXT = 'FFFFFF'
+const SUBHEADER_FILL = 'F1F5F9'
+const ALT_ROW_FILL = 'F8FAFC'
+
+const generateEnrollmentReportExcel = (group: EnrollmentReportGroup, sectionList: Section[]) => {
+  const rows = buildEnrollmentReportRows(group, sectionList)
+  const colCount = REPORT_COLUMNS.length
+  const aoa: string[][] = [
+    ['CITY COLLEGE OF BAYAWAN'],
+    ['OFFICE OF THE COLLEGE REGISTRAR'],
+    ['ENROLLED STUDENTS REPORT'],
+    [`${group.programName} | ${group.academicYear} | Year ${group.yearLevel} | Section ${group.sectionName} | ${semesterLabelForReport(group.semester)}`],
+    [`Generated: ${new Date().toLocaleDateString()}`],
+    [],
+    [...REPORT_COLUMNS],
+    ...rows.map((r) => REPORT_COLUMNS.map((col) => r[col] ?? '')),
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: colCount - 1 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: colCount - 1 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: colCount - 1 } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: colCount - 1 } },
+    { s: { r: 4, c: 0 }, e: { r: 4, c: colCount - 1 } },
+  ]
+  const headerStyle = {
+    font: { bold: true, sz: 14, color: { rgb: HEADER_TEXT } },
+    fill: { patternType: 'solid' as const, fgColor: { rgb: HEADER_FILL } },
+    alignment: { horizontal: 'center' as const },
+  }
+  const subStyle = {
+    font: { bold: true, sz: 11 },
+    fill: { patternType: 'solid' as const, fgColor: { rgb: SUBHEADER_FILL } },
+    alignment: { horizontal: 'center' as const },
+  }
+  const metaStyle = { font: { sz: 10 }, alignment: { horizontal: 'center' as const } }
+  const colHeaderStyle = {
+    font: { bold: true, sz: 10, color: { rgb: HEADER_TEXT } },
+    fill: { patternType: 'solid' as const, fgColor: { rgb: HEADER_FILL } },
+    alignment: { horizontal: 'center' as const },
+  }
+  ws['A1'] = { ...ws['A1'], s: headerStyle }
+  ws['A2'] = { ...ws['A2'], s: { ...headerStyle, font: { ...headerStyle.font, sz: 10 } } }
+  ws['A3'] = { ...ws['A3'], s: subStyle }
+  ws['A4'] = { ...ws['A4'], s: metaStyle }
+  ws['A5'] = { ...ws['A5'], s: metaStyle }
+  const colHeaderRow = 6
+  for (let c = 0; c < colCount; c++) {
+    const ref = XLSX.utils.encode_cell({ r: colHeaderRow, c })
+    ws[ref] = { ...ws[ref], s: colHeaderStyle }
+  }
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < colCount; c++) {
+      const ref = XLSX.utils.encode_cell({ r: colHeaderRow + 1 + r, c })
+      if (ws[ref]) {
+        ws[ref] = {
+          ...ws[ref],
+          s: { fill: { patternType: 'solid' as const, fgColor: { rgb: r % 2 === 1 ? ALT_ROW_FILL : 'FFFFFF' } } },
+        }
+      }
+    }
+  }
+  ws['!cols'] = REPORT_COLUMNS.map(() => ({ wch: 14 }))
+  const wb = XLSX.utils.book_new()
+  const sheetName = `${group.sectionName}_Enrollment`.slice(0, 31).replace(/[*?:/\\]/g, '')
+  XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Students')
+  const safeName = `${group.programName.replace(/[^a-z0-9]/gi, '_')}_${group.academicYear}_Year${group.yearLevel}_${group.sectionName}`.slice(0, 80)
+  XLSX.writeFile(wb, `Enrollment_Report_${safeName}.xlsx`)
 }
 
 type StudentLoad = {
@@ -218,10 +412,12 @@ type EnrollmentNoticeTone = 'success' | 'error' | 'warning'
 
 const MWF_SLOTS = ['7:00-8:00', '8:00-9:00', '9:00-10:00', '10:00-11:00', '11:00-12:00', '1:00-2:00', '2:00-3:00', '3:00-4:00', '4:00-5:00', '5:30-6:30']
 const TTH_SLOTS = ['7:00-8:30', '8:30-10:00', '10:00-11:30', '1:00-2:30', '2:30-4:00', '4:00-5:30', '5:30-7:00', '7:00-8:30', 'SATURDAY_HEADER', '1:00-5:00', '', '']
-const DEFAULT_ENROLLMENT_ACADEMIC_YEAR = '2025-2026'
+const getDefaultEnrollmentAcademicYear = (): string => {
+  const start = new Date().getFullYear()
+  return `${start}-${start + 1}`
+}
 const DEFAULT_ENROLLMENT_SEMESTER = '2'
-const DEFAULT_STUDENT_ID_PREFIX = '2025'
-const DEFAULT_PROGRAM_NAME = 'Bachelor of Science in Entrepreneurship'
+const DEFAULT_STUDENT_ID_PREFIX = '2026'
 const ENROLLMENT_NOTICE_DURATION_MS = 5000
 
 const getTodayDateInputValue = (): string => new Date().toISOString().split('T')[0]
@@ -241,7 +437,7 @@ const buildInitialStudentForm = (): StudentCreateForm => ({
   program: '',
   section: '',
   year_level: '1',
-  academic_year: DEFAULT_ENROLLMENT_ACADEMIC_YEAR,
+  academic_year: getDefaultEnrollmentAcademicYear(),
   semester: DEFAULT_ENROLLMENT_SEMESTER,
   home_address: '',
   postal_code: '',
@@ -263,6 +459,60 @@ const buildInitialStudentForm = (): StudentCreateForm => ({
   dean_name: '',
   dean_approval_status: 'approved',
 })
+
+const isBlankEnrollmentField = (value: string | undefined | null): boolean => !String(value ?? '').trim()
+
+const getEnrollmentFormValidationMessage = (
+  form: StudentCreateForm,
+  options: { sectionChoiceRequired: boolean },
+): string | null => {
+  const missStudent: string[] = []
+  const missParent: string[] = []
+  const missEdu: string[] = []
+  const s = (label: string, arr: string[], blank: boolean) => {
+    if (blank) arr.push(label)
+  }
+
+  s('Last name', missStudent, isBlankEnrollmentField(form.last_name))
+  s('First name', missStudent, isBlankEnrollmentField(form.first_name))
+  s('Middle name', missStudent, isBlankEnrollmentField(form.middle_name))
+  s('Gender', missStudent, isBlankEnrollmentField(form.gender))
+  s('Date of birth', missStudent, isBlankEnrollmentField(form.date_of_birth))
+  s('Civil status', missStudent, isBlankEnrollmentField(form.civil_status))
+  s('Student ID', missStudent, isBlankEnrollmentField(form.student_id))
+  s('Program', missStudent, isBlankEnrollmentField(form.program))
+  s('Year level', missStudent, isBlankEnrollmentField(form.year_level))
+  s('Academic year', missStudent, isBlankEnrollmentField(form.academic_year))
+  s('Semester', missStudent, isBlankEnrollmentField(form.semester))
+  if (options.sectionChoiceRequired) {
+    s('Section', missStudent, isBlankEnrollmentField(form.section))
+  }
+  s('Scholarship', missStudent, isBlankEnrollmentField(form.scholarship))
+  s('Nationality', missStudent, isBlankEnrollmentField(form.nationality))
+  s('Date enrolled', missStudent, isBlankEnrollmentField(form.admission_date))
+  s('Home address', missStudent, isBlankEnrollmentField(form.home_address))
+  s('Email address', missStudent, isBlankEnrollmentField(form.email_address))
+  s('Mobile number', missStudent, isBlankEnrollmentField(form.contact_number))
+
+  s("Mother's maiden name", missParent, isBlankEnrollmentField(form.mother_maiden_name))
+  s("Mother's mobile no.", missParent, isBlankEnrollmentField(form.mother_contact_number))
+  s("Father's name", missParent, isBlankEnrollmentField(form.father_name))
+  s("Father's mobile no.", missParent, isBlankEnrollmentField(form.father_contact_number))
+
+  s('Elementary school', missEdu, isBlankEnrollmentField(form.elementary_school))
+  s('Junior high school', missEdu, isBlankEnrollmentField(form.junior_high_school))
+  s('Senior high school', missEdu, isBlankEnrollmentField(form.senior_high_school))
+  s('Track', missEdu, isBlankEnrollmentField(form.senior_high_track))
+  s('Strand', missEdu, isBlankEnrollmentField(form.senior_high_strand))
+
+  if (!missStudent.length && !missParent.length && !missEdu.length) return null
+
+  const parts: string[] = []
+  if (missStudent.length) parts.push(`Student Information (${missStudent.join(', ')})`)
+  if (missParent.length) parts.push(`Parent or Guardian Information (${missParent.join(', ')})`)
+  if (missEdu.length) parts.push(`Educational Record (${missEdu.join(', ')})`)
+  return `Complete all required fields before saving: ${parts.join('; ')}.`
+}
 
 const nullableNumber = (value: string): number | null => (value ? Number(value) : null)
 
@@ -1022,6 +1272,9 @@ export function EnrollmentPage() {
   const [warning, setWarning] = useState('')
   const [notificationProgress, setNotificationProgress] = useState(100)
   const [folderSearchQueries, setFolderSearchQueries] = useState<Record<string, string>>({})
+  const [folderStatuses, setFolderStatuses] = useState<Record<string, ContinuingFolderStatus>>({})
+  const [savingFolderStatuses, setSavingFolderStatuses] = useState<Record<string, boolean>>({})
+  const [reportMenuOpen, setReportMenuOpen] = useState<string | null>(null)
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>(() => {
     if (typeof window === 'undefined') return {}
     try {
@@ -1037,12 +1290,6 @@ export function EnrollmentPage() {
   const computedAge = calculateAgeFromDob(studentForm.date_of_birth)
   const academicYearOptions = useMemo(buildAcademicYearOptions, [])
   const [approvalDate, setApprovalDate] = useState(() => getTodayDateInputValue())
-  const defaultProgram = useMemo(
-    () => programs.find((program) => program.name === DEFAULT_PROGRAM_NAME) || null,
-    [programs],
-  )
-  const defaultProgramId = defaultProgram ? String(defaultProgram.id) : ''
-
   useEffect(() => {
     const handleBeforePrint = () => setIsPrintingLoadSlip(true)
     const handleAfterPrint = () => setIsPrintingLoadSlip(false)
@@ -1121,13 +1368,14 @@ export function EnrollmentPage() {
   }, [])
 
   const loadReferenceData = async () => {
-    const [subjectResp, termResp, departmentResp, programResp, sectionResp, prospectusResp] = await Promise.all([
+    const [subjectResp, termResp, departmentResp, programResp, sectionResp, prospectusResp, folderStatusResp] = await Promise.all([
       api.get<Subject[]>('/subjects/'),
       api.get<AcademicTerm[]>('/terms/'),
       api.get<Department[]>('/departments/'),
       api.get<Program[]>('/programs/'),
       api.get<Section[]>('/sections/'),
       api.get<ProspectusEntry[]>('/prospectus/'),
+      api.get<ContinuingFolderStatus[]>('/continuing/folder-statuses/'),
     ])
     setSubjects(subjectResp.data)
     setTerms(termResp.data)
@@ -1135,18 +1383,15 @@ export function EnrollmentPage() {
     setPrograms(programResp.data)
     setSections(sectionResp.data)
     setProspectusEntries(prospectusResp.data)
+    setFolderStatuses(
+      folderStatusResp.data.reduce<Record<string, ContinuingFolderStatus>>((acc, item) => {
+        acc[buildContinuingFolderStatusKey(item.program, item.academic_year, item.year_level, item.section, item.semester)] = item
+        return acc
+      }, {}),
+    )
 
     const activeTerm = termResp.data.find((term) => term.is_active)
     if (activeTerm) setSelectedTerm(String(activeTerm.id))
-    const resolvedDefaultProgram = programResp.data.find((program) => program.name === DEFAULT_PROGRAM_NAME)
-    if (resolvedDefaultProgram) {
-      setStudentForm((prev) => ({
-        ...prev,
-        program: prev.program || String(resolvedDefaultProgram.id),
-        adviser_name: prev.adviser_name || resolvedDefaultProgram.program_adviser || '',
-        dean_name: prev.dean_name || resolvedDefaultProgram.school_dean || '',
-      }))
-    }
   }
 
   useEffect(() => {
@@ -1157,6 +1402,13 @@ export function EnrollmentPage() {
   useEffect(() => {
     window.localStorage.setItem(ENROLLMENT_FOLDERS_STORAGE_KEY, JSON.stringify(openFolders))
   }, [openFolders])
+
+  useEffect(() => {
+    if (!reportMenuOpen) return
+    const closeOnClick = () => setReportMenuOpen(null)
+    window.setTimeout(() => document.addEventListener('click', closeOnClick), 0)
+    return () => document.removeEventListener('click', closeOnClick)
+  }, [reportMenuOpen])
 
   const refreshStudent = async (studentId: string) => {
     const studentResp = await api.get<StudentDetail>(`/students/${studentId}/`)
@@ -1704,12 +1956,7 @@ export function EnrollmentPage() {
     setDraggingCell(null)
     setDropTarget(null)
     setApprovalDate(baseForm.admission_date)
-    setStudentForm({
-      ...baseForm,
-      program: defaultProgramId,
-      adviser_name: defaultProgram?.program_adviser || '',
-      dean_name: defaultProgram?.school_dean || '',
-    })
+    setStudentForm(baseForm)
     setScheduleRows(buildInitialScheduleRows())
   }
 
@@ -1807,160 +2054,6 @@ export function EnrollmentPage() {
       setError(getErrorMessage(err))
     } finally {
       setIsDeletingStudent(false)
-    }
-  }
-
-  const createStudent = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setError('')
-    setSuccess('')
-    setWarning('')
-
-    try {
-      const scheduleText = buildScheduleTextFromRows(scheduleRows)
-      const combinedTrackStrand = [studentForm.senior_high_track, studentForm.senior_high_strand]
-        .map((value) => value.trim())
-        .filter(Boolean)
-        .join(' / ')
-      const studentPayload = {
-        student_id: studentForm.student_id,
-        last_name: studentForm.last_name,
-        first_name: studentForm.first_name,
-        middle_name: studentForm.middle_name,
-        extension_name: studentForm.extension_name,
-        gender: studentForm.gender,
-        date_of_birth: studentForm.date_of_birth || null,
-        age: computedAge,
-        civil_status: studentForm.civil_status,
-        nationality: studentForm.nationality,
-        admission_date: studentForm.admission_date || null,
-        scholarship: studentForm.scholarship || DEFAULT_SCHOLARSHIP_LABEL,
-        program: Number(studentForm.program),
-        section: nullableNumber(studentForm.section),
-        year_level: Number(studentForm.year_level),
-        academic_year: studentForm.academic_year,
-        semester: nullableNumber(studentForm.semester),
-        home_address: studentForm.home_address,
-        postal_code: studentForm.postal_code,
-        email_address: studentForm.email_address,
-        contact_number: studentForm.contact_number,
-        mother_maiden_name: studentForm.mother_maiden_name,
-        mother_contact_number: studentForm.mother_contact_number,
-        father_name: studentForm.father_name,
-        father_contact_number: studentForm.father_contact_number,
-        elementary_school: studentForm.elementary_school,
-        junior_high_school: studentForm.junior_high_school,
-        senior_high_school: studentForm.senior_high_school,
-        senior_high_track: studentForm.senior_high_track,
-        senior_high_strand: studentForm.senior_high_strand,
-        senior_high_track_strand: combinedTrackStrand,
-        subject_load_schedule: scheduleText,
-        adviser_name: studentForm.adviser_name,
-        adviser_approval_status: studentForm.adviser_approval_status,
-        adviser_approval_date: approvalDate || null,
-        dean_name: studentForm.dean_name,
-        dean_approval_status: studentForm.dean_approval_status,
-        dean_approval_date: approvalDate || null,
-      }
-
-      if (editingStudentId) {
-        await api.patch(`/students/${editingStudentId}/`, studentPayload)
-        await refreshStudent(studentForm.student_id)
-        await loadEnrolledStudents()
-        if (shouldCloseOnSaveEnrollment) closeEnrollModal()
-        setSuccess('Student information updated successfully.')
-        return
-      }
-
-      await api.post('/students/', studentPayload)
-
-      // Create AcademicHistory record for 1st Year - 1st Semester
-      try {
-        const studentResponse = await api.get(`/students/${studentForm.student_id}/`)
-        const createdStudent = studentResponse.data
-        
-        await api.post('/academic-history/', {
-          student: createdStudent.id,
-          academic_year: studentForm.academic_year,
-          year_level: 1,  // Always 1st Year for new enrollment
-          semester: 1,    // Always 1st Semester for new enrollment
-          program: Number(studentForm.program),
-          section: nullableNumber(studentForm.section),
-          
-          // Personal Information (snapshot)
-          first_name: studentForm.first_name,
-          last_name: studentForm.last_name,
-          middle_name: studentForm.middle_name,
-          extension_name: studentForm.extension_name,
-          gender: studentForm.gender,
-          date_of_birth: studentForm.date_of_birth || null,
-          age: computedAge,
-          civil_status: studentForm.civil_status,
-          nationality: studentForm.nationality,
-          admission_date: studentForm.admission_date || null,
-          scholarship: studentForm.scholarship || DEFAULT_SCHOLARSHIP_LABEL,
-          course: '',  // Will be populated from program if needed
-          
-          // Contact Information (snapshot)
-          home_address: studentForm.home_address,
-          postal_code: studentForm.postal_code,
-          email_address: studentForm.email_address,
-          contact_number: studentForm.contact_number,
-          
-          // Family Information (snapshot)
-          mother_maiden_name: studentForm.mother_maiden_name,
-          mother_contact_number: studentForm.mother_contact_number,
-          father_name: studentForm.father_name,
-          father_contact_number: studentForm.father_contact_number,
-          
-          // Educational Background (snapshot)
-          elementary_school: studentForm.elementary_school,
-          junior_high_school: studentForm.junior_high_school,
-          senior_high_school: studentForm.senior_high_school,
-          senior_high_track: studentForm.senior_high_track,
-          senior_high_strand: studentForm.senior_high_strand,
-          senior_high_track_strand: combinedTrackStrand,
-          
-          // Academic Information for this Semester
-          subject_load_schedule: scheduleText,
-          adviser_name: studentForm.adviser_name,
-          adviser_approval_status: studentForm.adviser_approval_status,
-          adviser_approval_date: approvalDate || null,
-          dean_name: studentForm.dean_name,
-          dean_approval_status: studentForm.dean_approval_status,
-          dean_approval_date: approvalDate || null,
-          
-          // Status and Dates
-          status: 'ongoing',
-          start_date: new Date().toISOString().split('T')[0],  // Today's date
-          end_date: null,
-        })
-      } catch (historyErr) {
-        // If academic-history endpoint doesn't exist, warn but continue.
-        console.warn('AcademicHistory endpoint not implemented yet, proceeding with enrollment only')
-        setWarning('Student was enrolled, but academic history was not saved.')
-      }
-
-      setSearchId(studentForm.student_id)
-      await refreshStudent(studentForm.student_id)
-      await loadEnrolledStudents()
-      setSuccess('Student successfully registered/enrolled.')
-      if (shouldCloseOnSaveEnrollment) {
-        closeEnrollModal()
-      } else {
-        const baseForm = buildInitialStudentForm()
-        setEditingStudentId(null)
-        setStudentForm((prev) => ({
-          ...baseForm,
-          program: prev.program,
-          adviser_name: prev.adviser_name,
-          dean_name: prev.dean_name,
-        }))
-        setApprovalDate(baseForm.admission_date)
-        setScheduleRows(buildInitialScheduleRows())
-      }
-    } catch (err) {
-      setError(getErrorMessage(err))
     }
   }
 
@@ -2103,6 +2196,211 @@ export function EnrollmentPage() {
     hasMatchingAcademicTerm,
     availableSections,
   ])
+
+  const sectionChoiceRequired =
+    hasRequiredSectionFilters && hasMatchingAcademicTerm && availableSections.length > 0
+
+  const createStudent = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError('')
+    setSuccess('')
+    setWarning('')
+
+    const validationMessage = getEnrollmentFormValidationMessage(studentForm, {
+      sectionChoiceRequired,
+    })
+    if (validationMessage) {
+      setError(validationMessage)
+      return
+    }
+
+    try {
+      const scheduleText = buildScheduleTextFromRows(scheduleRows)
+      const combinedTrackStrand = [studentForm.senior_high_track, studentForm.senior_high_strand]
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .join(' / ')
+      const studentPayload = {
+        student_id: studentForm.student_id,
+        last_name: studentForm.last_name,
+        first_name: studentForm.first_name,
+        middle_name: studentForm.middle_name,
+        extension_name: studentForm.extension_name,
+        gender: studentForm.gender,
+        date_of_birth: studentForm.date_of_birth || null,
+        age: computedAge,
+        civil_status: studentForm.civil_status,
+        nationality: studentForm.nationality,
+        admission_date: studentForm.admission_date || null,
+        scholarship: studentForm.scholarship || DEFAULT_SCHOLARSHIP_LABEL,
+        program: Number(studentForm.program),
+        section: nullableNumber(studentForm.section),
+        year_level: Number(studentForm.year_level),
+        academic_year: studentForm.academic_year,
+        semester: nullableNumber(studentForm.semester),
+        home_address: studentForm.home_address,
+        postal_code: studentForm.postal_code,
+        email_address: studentForm.email_address,
+        contact_number: studentForm.contact_number,
+        mother_maiden_name: studentForm.mother_maiden_name,
+        mother_contact_number: studentForm.mother_contact_number,
+        father_name: studentForm.father_name,
+        father_contact_number: studentForm.father_contact_number,
+        elementary_school: studentForm.elementary_school,
+        junior_high_school: studentForm.junior_high_school,
+        senior_high_school: studentForm.senior_high_school,
+        senior_high_track: studentForm.senior_high_track,
+        senior_high_strand: studentForm.senior_high_strand,
+        senior_high_track_strand: combinedTrackStrand,
+        subject_load_schedule: scheduleText,
+        adviser_name: studentForm.adviser_name,
+        adviser_approval_status: studentForm.adviser_approval_status,
+        adviser_approval_date: approvalDate || null,
+        dean_name: studentForm.dean_name,
+        dean_approval_status: studentForm.dean_approval_status,
+        dean_approval_date: approvalDate || null,
+      }
+
+      if (editingStudentId) {
+        await api.patch(`/students/${editingStudentId}/`, studentPayload)
+        await refreshStudent(studentForm.student_id)
+        await loadEnrolledStudents()
+        if (shouldCloseOnSaveEnrollment) closeEnrollModal()
+        setSuccess('Student information updated successfully.')
+        return
+      }
+
+      await api.post('/students/', studentPayload)
+
+      // Create AcademicHistory record for 1st Year - 1st Semester
+      try {
+        const studentResponse = await api.get(`/students/${studentForm.student_id}/`)
+        const createdStudent = studentResponse.data
+
+        await api.post('/academic-history/', {
+          student: createdStudent.id,
+          academic_year: studentForm.academic_year,
+          year_level: 1, // Always 1st Year for new enrollment
+          semester: 1, // Always 1st Semester for new enrollment
+          program: Number(studentForm.program),
+          section: nullableNumber(studentForm.section),
+
+          // Personal Information (snapshot)
+          first_name: studentForm.first_name,
+          last_name: studentForm.last_name,
+          middle_name: studentForm.middle_name,
+          extension_name: studentForm.extension_name,
+          gender: studentForm.gender,
+          date_of_birth: studentForm.date_of_birth || null,
+          age: computedAge,
+          civil_status: studentForm.civil_status,
+          nationality: studentForm.nationality,
+          admission_date: studentForm.admission_date || null,
+          scholarship: studentForm.scholarship || DEFAULT_SCHOLARSHIP_LABEL,
+          course: '', // Will be populated from program if needed
+
+          // Contact Information (snapshot)
+          home_address: studentForm.home_address,
+          postal_code: studentForm.postal_code,
+          email_address: studentForm.email_address,
+          contact_number: studentForm.contact_number,
+
+          // Family Information (snapshot)
+          mother_maiden_name: studentForm.mother_maiden_name,
+          mother_contact_number: studentForm.mother_contact_number,
+          father_name: studentForm.father_name,
+          father_contact_number: studentForm.father_contact_number,
+
+          // Educational Background (snapshot)
+          elementary_school: studentForm.elementary_school,
+          junior_high_school: studentForm.junior_high_school,
+          senior_high_school: studentForm.senior_high_school,
+          senior_high_track: studentForm.senior_high_track,
+          senior_high_strand: studentForm.senior_high_strand,
+          senior_high_track_strand: combinedTrackStrand,
+
+          // Academic Information for this Semester
+          subject_load_schedule: scheduleText,
+          adviser_name: studentForm.adviser_name,
+          adviser_approval_status: studentForm.adviser_approval_status,
+          adviser_approval_date: approvalDate || null,
+          dean_name: studentForm.dean_name,
+          dean_approval_status: studentForm.dean_approval_status,
+          dean_approval_date: approvalDate || null,
+
+          // Status and Dates
+          status: 'ongoing',
+          start_date: new Date().toISOString().split('T')[0], // Today's date
+          end_date: null,
+        })
+      } catch (historyErr) {
+        // If academic-history endpoint doesn't exist, warn but continue.
+        console.warn('AcademicHistory endpoint not implemented yet, proceeding with enrollment only')
+        setWarning('Student was enrolled, but academic history was not saved.')
+      }
+
+      const ayLabel = (studentForm.academic_year || '').trim()
+      const semNum = Number(studentForm.semester)
+      const matchingTerms =
+        ayLabel && Number.isFinite(semNum)
+          ? terms.filter((t) => t.year_label === ayLabel && t.semester === semNum)
+          : []
+      const postEnrollTerm = matchingTerms.find((t) => t.is_active) ?? matchingTerms[0] ?? null
+
+      let autoLoadCreated = 0
+      let autoLoadError: string | null = null
+      if (postEnrollTerm) {
+        try {
+          const autoResp = await api.post<{ created_load_rows: number }>(
+            `/students/${studentForm.student_id}/auto-load/`,
+            { term_id: postEnrollTerm.id },
+          )
+          autoLoadCreated = autoResp.data.created_load_rows ?? 0
+        } catch (autoErr) {
+          autoLoadError = getErrorMessage(autoErr)
+        }
+      }
+
+      setSearchId(studentForm.student_id)
+      await refreshStudent(studentForm.student_id)
+      await loadEnrolledStudents()
+
+      let successMsg = 'Student successfully registered/enrolled.'
+      if (postEnrollTerm && autoLoadCreated > 0) {
+        successMsg += ` Auto-created ${autoLoadCreated} subject load${autoLoadCreated === 1 ? '' : 's'} from the prospectus.`
+      }
+      setSuccess(successMsg)
+
+      if (autoLoadError) {
+        setWarning((prev) => {
+          const extra = `Auto-load did not complete: ${autoLoadError}`
+          return prev ? `${prev} ${extra}` : extra
+        })
+      } else if (terms.length > 0 && !postEnrollTerm && ayLabel) {
+        setWarning((prev) => {
+          const extra =
+            "No academic term matches this student's school year and semester, so subject loads were not auto-created. Add a matching term under Admin or run auto-load manually."
+          return prev ? `${prev} ${extra}` : extra
+        })
+      }
+      if (shouldCloseOnSaveEnrollment) {
+        closeEnrollModal()
+      } else {
+        const baseForm = buildInitialStudentForm()
+        setEditingStudentId(null)
+        setStudentForm((prev) => ({
+          ...baseForm,
+          program: prev.program,
+          adviser_name: prev.adviser_name,
+          dean_name: prev.dean_name,
+        }))
+        setApprovalDate(baseForm.admission_date)
+        setScheduleRows(buildInitialScheduleRows())
+      }
+    } catch (err) {
+      setError(getErrorMessage(err))
+    }
+  }
 
   const currentSemesterLoads = useMemo(() => {
     if (!student || !student.academic_year || !student.semester) return [] as StudentLoad[]
@@ -2435,10 +2733,13 @@ export function EnrollmentPage() {
   const groupedEnrolledStudents = useMemo(() => {
     type GroupedNode = {
       key: string
+      statusKey: string
+      programId: number
       programName: string
       academicYear: string
       yearLevel: number
       semester: number | null
+      sectionId: number | null
       sectionName: string
       students: EnrolledStudent[]
       totalStudents: number
@@ -2446,20 +2747,41 @@ export function EnrollmentPage() {
     const groupMap = new Map<string, EnrolledStudent[]>()
     const groupMeta = new Map<
       string,
-      { programName: string; academicYear: string; yearLevel: number; semester: number | null; sectionName: string }
+      {
+        statusKey: string
+        programId: number
+        programName: string
+        academicYear: string
+        yearLevel: number
+        semester: number | null
+        sectionId: number | null
+        sectionName: string
+      }
     >()
-    enrolledStudents.forEach((student) => {
-      const programName = programs.find((p) => p.id === student.program)?.name || 'Unknown Program'
-      const academicYear = student.academic_year || '-'
-      const yearLevel = Number(student.year_level || 0)
-      const semester = student.semester ?? null
-      const sectionName = sections.find((s) => s.id === student.section)?.name || 'Unassigned'
+    enrolledStudents.forEach((studentItem) => {
+      const programId = Number(studentItem.program || 0)
+      const programName = programs.find((p) => p.id === studentItem.program)?.name || 'Unknown Program'
+      const academicYear = studentItem.academic_year || '-'
+      const yearLevel = Number(studentItem.year_level || 0)
+      const semester = studentItem.semester ?? null
+      const sectionId = studentItem.section ?? null
+      const sectionName = sections.find((s) => s.id === sectionId)?.name || 'Unassigned'
       const groupKey = `${programName}|${academicYear}|${yearLevel}|${sectionName}|${semester ?? 'none'}`
+      const statusKey = buildContinuingFolderStatusKey(programId, academicYear, yearLevel, sectionId, semester)
       if (!groupMap.has(groupKey)) {
         groupMap.set(groupKey, [])
-        groupMeta.set(groupKey, { programName, academicYear, yearLevel, semester, sectionName })
+        groupMeta.set(groupKey, {
+          statusKey,
+          programId,
+          programName,
+          academicYear,
+          yearLevel,
+          semester,
+          sectionId,
+          sectionName,
+        })
       }
-      groupMap.get(groupKey)!.push(student)
+      groupMap.get(groupKey)!.push(studentItem)
     })
     const sortSemester = (sem: number | null) => (sem === null ? 99 : sem)
     const grouped: GroupedNode[] = Array.from(groupMap.entries()).map(([key, studentsInGroup]) => {
@@ -2522,10 +2844,64 @@ export function EnrollmentPage() {
     return index === 0
   }
 
+  const getFolderStatusLabel = (status: ContinuingFolderStatus['status'] | undefined) => (status === 'done' ? 'Done' : 'Ongoing')
+
+  const updateFolderStatus = async (group: {
+    statusKey: string
+    programId: number
+    academicYear: string
+    yearLevel: number
+    semester: number | null
+    sectionId: number | null
+    programName: string
+    sectionName: string
+  }) => {
+    const currentStatus = folderStatuses[group.statusKey]?.status ?? 'ongoing'
+    const nextStatus: ContinuingFolderStatus['status'] = currentStatus === 'done' ? 'ongoing' : 'done'
+
+    setSavingFolderStatuses((current) => ({ ...current, [group.statusKey]: true }))
+    setError('')
+    setSuccess('')
+
+    try {
+      const response = await api.post<ContinuingFolderStatus>('/continuing/folder-statuses/', {
+        program: group.programId,
+        academic_year: group.academicYear,
+        year_level: group.yearLevel,
+        semester: group.semester,
+        section: group.sectionId,
+        status: nextStatus,
+      })
+
+      setFolderStatuses((current) => ({
+        ...current,
+        [group.statusKey]: response.data,
+      }))
+      setSuccess(
+        `${group.programName} | ${group.sectionName} marked as ${getFolderStatusLabel(nextStatus).toLowerCase()}.`,
+      )
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setSavingFolderStatuses((current) => ({ ...current, [group.statusKey]: false }))
+    }
+  }
+
   return (
-    <section className="card">
-      <h1>Enrollment Module</h1>
-      <p>Register students, search profiles, and manage subject loads.</p>
+    <section className="card enrollment-page">
+      <header className="enrollment-page-header">
+        <h1 className="enrollment-page-title">
+          <EnrollmentIcon aria-hidden />
+          <span>Enrollment Module</span>
+        </h1>
+        <p className="enrollment-page-lede">Register students, search profiles, and manage subject loads.</p>
+      </header>
+      <p className="workflow-route-hint">
+        Before heavy enrollment: ensure <strong>Admin</strong> has programs, <strong>Program Offerings</strong>, an <strong>active Academic Term</strong>, and{' '}
+        <strong>Sections</strong>; map subjects in <strong>Prospectus</strong> for that program, year, semester, and school year. Loads and
+        schedules respect prospectus and the active term. After a cohort advances, use <strong>Continuing</strong> for promotions and new
+        term setup.
+      </p>
 
       {activeNotification && activeNotificationMeta && (
         <div className="enrollment-notice-overlay" role="presentation">
@@ -2578,12 +2954,7 @@ export function EnrollmentPage() {
             setEditingStudentId(null)
             setScanStep('idle')
             setScanStatus('')
-            setStudentForm({
-              ...baseForm,
-              program: defaultProgramId,
-              adviser_name: defaultProgram?.program_adviser || '',
-              dean_name: defaultProgram?.school_dean || '',
-            })
+            setStudentForm(baseForm)
             setApprovalDate(baseForm.admission_date)
             setScheduleRows(buildInitialScheduleRows())
             setIsEnrollModalOpen(true)
@@ -2644,9 +3015,9 @@ export function EnrollmentPage() {
               <div className="sheet-grid">
                 <input placeholder="Last Name" value={studentForm.last_name} onChange={(e) => onStudentFieldChange('last_name', e.target.value)} required />
                 <input placeholder="First Name" value={studentForm.first_name} onChange={(e) => onStudentFieldChange('first_name', e.target.value)} required />
-                <input placeholder="Middle Name" value={studentForm.middle_name} onChange={(e) => onStudentFieldChange('middle_name', e.target.value)} />
+                <input placeholder="Middle Name" value={studentForm.middle_name} onChange={(e) => onStudentFieldChange('middle_name', e.target.value)} required />
                 <input placeholder="Name Ext." value={studentForm.extension_name} onChange={(e) => onStudentFieldChange('extension_name', e.target.value)} />
-                <select value={studentForm.gender} onChange={(e) => onStudentFieldChange('gender', e.target.value)}>
+                <select value={studentForm.gender} onChange={(e) => onStudentFieldChange('gender', e.target.value)} required>
                   <option value="">Gender</option>
                   <option value="Male">Male</option>
                   <option value="Female">Female</option>
@@ -2655,10 +3026,10 @@ export function EnrollmentPage() {
                 </select>
                 <div className="field-inline-label">
                   <span>Date of Birth</span>
-                  <input type="date" value={studentForm.date_of_birth} onChange={(e) => onStudentFieldChange('date_of_birth', e.target.value)} />
+                  <input type="date" value={studentForm.date_of_birth} onChange={(e) => onStudentFieldChange('date_of_birth', e.target.value)} required />
                 </div>
                 <input placeholder="Age (Auto)" value={computedAge ?? ''} readOnly />
-                <select value={studentForm.civil_status} onChange={(e) => onStudentFieldChange('civil_status', e.target.value)}>
+                <select value={studentForm.civil_status} onChange={(e) => onStudentFieldChange('civil_status', e.target.value)} required>
                   <option value="">Status</option>
                   <option value="Single">Single</option>
                   <option value="Married">Married</option>
@@ -2674,20 +3045,20 @@ export function EnrollmentPage() {
                   required
                 />
                 <select value={studentForm.program} onChange={(e) => onProgramChange(e.target.value)} required>
-                  <option value="">Program</option>
+                  <option value="">Select Program</option>
                   {programs.map((program) => (
                     <option key={program.id} value={program.id}>
                       {program.name}
                     </option>
                   ))}
                 </select>
-                <select value={studentForm.year_level} onChange={(e) => onStudentFieldChange('year_level', e.target.value)}>
+                <select value={studentForm.year_level} onChange={(e) => onStudentFieldChange('year_level', e.target.value)} required>
                   <option value="1">Year 1</option>
                   <option value="2">Year 2</option>
                   <option value="3">Year 3</option>
                   <option value="4">Year 4</option>
                 </select>
-                <select value={studentForm.academic_year} onChange={(e) => onStudentFieldChange('academic_year', e.target.value)}>
+                <select value={studentForm.academic_year} onChange={(e) => onStudentFieldChange('academic_year', e.target.value)} required>
                   <option value="">Academic Year</option>
                   {academicYearOptions.map((yearLabel) => (
                     <option key={yearLabel} value={yearLabel}>
@@ -2695,7 +3066,7 @@ export function EnrollmentPage() {
                     </option>
                   ))}
                 </select>
-                <select value={studentForm.semester} onChange={(e) => onStudentFieldChange('semester', e.target.value)}>
+                <select value={studentForm.semester} onChange={(e) => onStudentFieldChange('semester', e.target.value)} required>
                   <option value="1">1st Semester</option>
                   <option value="2">2nd Semester</option>
                   <option value="3">Summer</option>
@@ -2704,6 +3075,7 @@ export function EnrollmentPage() {
                   value={studentForm.section}
                   onChange={(e) => onStudentFieldChange('section', e.target.value)}
                   disabled={!hasRequiredSectionFilters || !hasMatchingAcademicTerm || !availableSections.length}
+                  required={sectionChoiceRequired}
                 >
                   <option value="">{sectionPlaceholder}</option>
                   {availableSections.map((section) => (
@@ -2712,36 +3084,36 @@ export function EnrollmentPage() {
                     </option>
                   ))}
                 </select>
-                <select value={studentForm.scholarship} onChange={(e) => onStudentFieldChange('scholarship', e.target.value)}>
+                <select value={studentForm.scholarship} onChange={(e) => onStudentFieldChange('scholarship', e.target.value)} required>
                   <option value="">Scholarship</option>
                   <option value="Non-Scholar">Non-Scholar</option>
                   <option value="PAGLAMBO">PAGLAMBO</option>
                 </select>
-                <input placeholder="Nationality" value={studentForm.nationality} onChange={(e) => onStudentFieldChange('nationality', e.target.value)} />
+                <input placeholder="Nationality" value={studentForm.nationality} onChange={(e) => onStudentFieldChange('nationality', e.target.value)} required />
                 <div className="field-inline-label">
                   <span>Date Enrolled</span>
-                  <input type="date" value={studentForm.admission_date} onChange={(e) => onStudentFieldChange('admission_date', e.target.value)} />
+                  <input type="date" value={studentForm.admission_date} onChange={(e) => onStudentFieldChange('admission_date', e.target.value)} required />
                 </div>
-                <input placeholder="Complete Home Address" value={studentForm.home_address} onChange={(e) => onStudentFieldChange('home_address', e.target.value)} />
-                <input placeholder="Email Address" value={studentForm.email_address} onChange={(e) => onStudentFieldChange('email_address', e.target.value)} />
-                <input placeholder="Mobile Number" value={studentForm.contact_number} onChange={(e) => onStudentFieldChange('contact_number', e.target.value)} />
+                <input placeholder="Complete Home Address" value={studentForm.home_address} onChange={(e) => onStudentFieldChange('home_address', e.target.value)} required />
+                <input placeholder="Email Address" value={studentForm.email_address} onChange={(e) => onStudentFieldChange('email_address', e.target.value)} required />
+                <input placeholder="Mobile Number" value={studentForm.contact_number} onChange={(e) => onStudentFieldChange('contact_number', e.target.value)} required />
               </div>
 
               <div className="sheet-section-title">Parent or Guardian Information</div>
               <div className="sheet-grid">
-                <input placeholder="Mother's Maiden Name" value={studentForm.mother_maiden_name} onChange={(e) => onStudentFieldChange('mother_maiden_name', e.target.value)} />
-                <input placeholder="Mother Mobile No." value={studentForm.mother_contact_number} onChange={(e) => onStudentFieldChange('mother_contact_number', e.target.value)} />
-                <input placeholder="Father's Name" value={studentForm.father_name} onChange={(e) => onStudentFieldChange('father_name', e.target.value)} />
-                <input placeholder="Father Mobile No." value={studentForm.father_contact_number} onChange={(e) => onStudentFieldChange('father_contact_number', e.target.value)} />
+                <input placeholder="Mother's Maiden Name" value={studentForm.mother_maiden_name} onChange={(e) => onStudentFieldChange('mother_maiden_name', e.target.value)} required />
+                <input placeholder="Mother Mobile No." value={studentForm.mother_contact_number} onChange={(e) => onStudentFieldChange('mother_contact_number', e.target.value)} required />
+                <input placeholder="Father's Name" value={studentForm.father_name} onChange={(e) => onStudentFieldChange('father_name', e.target.value)} required />
+                <input placeholder="Father Mobile No." value={studentForm.father_contact_number} onChange={(e) => onStudentFieldChange('father_contact_number', e.target.value)} required />
               </div>
 
               <div className="sheet-section-title">Educational Record</div>
               <div className="sheet-grid educational-record-grid">
-                <input placeholder="Elementary" value={studentForm.elementary_school} onChange={(e) => onStudentFieldChange('elementary_school', e.target.value)} />
-                <input placeholder="Junior High School" value={studentForm.junior_high_school} onChange={(e) => onStudentFieldChange('junior_high_school', e.target.value)} />
-                <input placeholder="Senior High School" value={studentForm.senior_high_school} onChange={(e) => onStudentFieldChange('senior_high_school', e.target.value)} />
-                <input placeholder="Track" value={studentForm.senior_high_track} onChange={(e) => onStudentFieldChange('senior_high_track', e.target.value)} />
-                <input placeholder="Strand" value={studentForm.senior_high_strand} onChange={(e) => onStudentFieldChange('senior_high_strand', e.target.value)} />
+                <input placeholder="Elementary" value={studentForm.elementary_school} onChange={(e) => onStudentFieldChange('elementary_school', e.target.value)} required />
+                <input placeholder="Junior High School" value={studentForm.junior_high_school} onChange={(e) => onStudentFieldChange('junior_high_school', e.target.value)} required />
+                <input placeholder="Senior High School" value={studentForm.senior_high_school} onChange={(e) => onStudentFieldChange('senior_high_school', e.target.value)} required />
+                <input placeholder="Track" value={studentForm.senior_high_track} onChange={(e) => onStudentFieldChange('senior_high_track', e.target.value)} required />
+                <input placeholder="Strand" value={studentForm.senior_high_strand} onChange={(e) => onStudentFieldChange('senior_high_strand', e.target.value)} required />
               </div>
 
               <div className="schedule-section-head">
@@ -2906,7 +3278,20 @@ export function EnrollmentPage() {
 
       <h2 className="section-title">Enrolled Students</h2>
       <div className="continuing-folder-list">
-        {groupedEnrolledStudents.map((group, index) => (
+        {groupedEnrolledStudents.map((group, index) => {
+          const currentFolderStatus = folderStatuses[group.statusKey]
+          const currentFolderStatusLabel = getFolderStatusLabel(currentFolderStatus?.status)
+          const isSavingFolderStatus = Boolean(savingFolderStatuses[group.statusKey])
+          const enrollmentReportGroup: EnrollmentReportGroup = {
+            programName: group.programName,
+            academicYear: group.academicYear,
+            yearLevel: group.yearLevel,
+            semester: group.semester,
+            sectionName: group.sectionName,
+            students: group.students,
+          }
+
+          return (
           <details
             key={group.key}
             className="continuing-folder admin-folder-animated"
@@ -2920,6 +3305,56 @@ export function EnrollmentPage() {
               </span>
               <span className="folder-summary-right">
                 <span className="folder-count">{group.totalStudents}</span>
+                <span className="continuing-folder-actions" onClick={(e) => e.stopPropagation()}>
+                  <div className="continuing-folder-report-wrap">
+                    <button
+                      type="button"
+                      className="continuing-folder-action-btn continuing-folder-report-btn"
+                      onClick={() => setReportMenuOpen((k) => (k === group.key ? null : group.key))}
+                      title="Generate student report"
+                    >
+                      Report
+                    </button>
+                    {reportMenuOpen === group.key && (
+                      <div className="continuing-folder-report-menu">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            generateEnrollmentReportPDF(enrollmentReportGroup, sections)
+                            setReportMenuOpen(null)
+                          }}
+                          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                        >
+                          <PdfIcon /> Export as PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            generateEnrollmentReportExcel(enrollmentReportGroup, sections)
+                            setReportMenuOpen(null)
+                          }}
+                          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                        >
+                          <ExcelIcon /> Export as Excel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className={`continuing-folder-action-btn continuing-folder-status-btn is-${currentFolderStatus?.status ?? 'ongoing'}`}
+                    onClick={() => {
+                      void updateFolderStatus(group)
+                    }}
+                    disabled={isSavingFolderStatus}
+                    title={currentFolderStatus?.updated_by_username ? `Last updated by ${currentFolderStatus.updated_by_username}` : undefined}
+                  >
+                    {isSavingFolderStatus ? 'Saving...' : currentFolderStatus?.status === 'done' ? 'Mark Ongoing' : 'Done'}
+                  </button>
+                </span>
+                <span className={`continuing-folder-status-badge is-${currentFolderStatus?.status ?? 'ongoing'}`}>
+                  {currentFolderStatusLabel}
+                </span>
                 <span className="folder-toggle-icon" aria-hidden="true">
                   <ChevronDownIcon />
                 </span>
@@ -3006,7 +3441,8 @@ export function EnrollmentPage() {
               </div>
             </div>
           </details>
-        ))}
+          )
+        })}
         {!groupedEnrolledStudents.length && (
           <div className="table-wrap">
             <table>
@@ -3072,140 +3508,176 @@ export function EnrollmentPage() {
 
 
       {student && !isViewModalOpen && (
-        <>  
-          <h2 className="section-title">Student Profile</h2>
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                <tr>
-                  <th>Student ID</th>
-                  <td>{student.student_id}</td>
-                  <th>Program</th>
-                  <td>{programs.find((p) => p.id === student.program)?.name || student.program}</td>
-                </tr>
-                <tr>
-                  <th>Name</th>
-                  <td>{`${student.last_name}, ${student.first_name} ${student.middle_name || ''} ${student.extension_name || ''}`}</td>
-                  <th>Year Level</th>
-                  <td>{student.year_level}</td>
-                </tr>
-                <tr>
-                  <th>Gender</th>
-                  <td>{student.gender}</td>
-                  <th>Section</th>
-                  <td>{sections.find((s) => s.id === student.section)?.name || '-'}</td>
-                </tr>
-                <tr>
-                  <th>Academic Year</th>
-                  <td>{student.academic_year}</td>
-                  <th>Semester</th>
-                  <td>{student.semester || '-'}</td>
-                </tr>
-                <tr>
-                  <th>Email</th>
-                  <td>{student.email_address || '-'}</td>
-                  <th>Contact No.</th>
-                  <td>{student.contact_number || '-'}</td>
-                </tr>
-                <tr>
-                  <th>Address</th>
-                  <td colSpan={3}>{student.home_address || '-'}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <div className="enrollment-student-workspace">
+          <header className="enrollment-student-workspace-head">
+            <p className="enrollment-student-workspace-kicker">Selected student</p>
+            <h2 className="enrollment-student-workspace-title">
+              {`${student.last_name}, ${student.first_name}`}
+              {student.middle_name ? ` ${student.middle_name}` : ''}
+              {student.extension_name ? ` ${student.extension_name}` : ''}
+            </h2>
+            <div className="enrollment-student-workspace-chips" role="list">
+              <span className="enrollment-chip" role="listitem">
+                {student.student_id}
+              </span>
+              <span className="enrollment-chip" role="listitem">
+                {programs.find((p) => p.id === student.program)?.name || `Program #${student.program}`}
+              </span>
+              <span className="enrollment-chip" role="listitem">
+                Year {student.year_level}
+              </span>
+              <span className="enrollment-chip" role="listitem">
+                Sec. {sections.find((s) => s.id === student.section)?.name || '—'}
+              </span>
+              <span className="enrollment-chip" role="listitem">
+                {student.academic_year || '—'}
+              </span>
+              <span className="enrollment-chip" role="listitem">
+                {getSemesterLabel(student.semester)}
+              </span>
+            </div>
+          </header>
 
-          <h2 className="section-title">Create Student Load</h2>
-          <form className="form-grid" onSubmit={saveLoad}>
-            <select value={selectedTerm} onChange={(e) => setSelectedTerm(e.target.value)} required>
-              <option value="">Select Term</option>
-              {terms.map((term) => (
-                <option key={term.id} value={term.id}>
-                  {term.year_label} - Sem {term.semester} {term.is_active ? '(Active)' : ''}
-                </option>
-              ))}
-            </select>
+          <details className="enrollment-profile-details">
+            <summary className="enrollment-profile-details-summary">
+              <span>Full profile and contact</span>
+              <span className="enrollment-profile-chevron-wrap" aria-hidden>
+                <ChevronDownIcon />
+              </span>
+            </summary>
+            <dl className="enrollment-profile-dl">
+              <dt>Student ID</dt>
+              <dd>{student.student_id}</dd>
+              <dt>Program</dt>
+              <dd>{programs.find((p) => p.id === student.program)?.name || student.program}</dd>
+              <dt>Name</dt>
+              <dd>{`${student.last_name}, ${student.first_name} ${student.middle_name || ''} ${student.extension_name || ''}`.trim()}</dd>
+              <dt>Year level</dt>
+              <dd>{student.year_level}</dd>
+              <dt>Gender</dt>
+              <dd>{student.gender}</dd>
+              <dt>Section</dt>
+              <dd>{sections.find((s) => s.id === student.section)?.name || '—'}</dd>
+              <dt>Academic year</dt>
+              <dd>{student.academic_year}</dd>
+              <dt>Semester</dt>
+              <dd>{getSemesterLabel(student.semester)}</dd>
+              <dt>Email</dt>
+              <dd>{student.email_address || '—'}</dd>
+              <dt>Contact</dt>
+              <dd>{student.contact_number || '—'}</dd>
+              <dt>Address</dt>
+              <dd>{student.home_address || '—'}</dd>
+            </dl>
+          </details>
 
-            <select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} required>
-              <option value="">Select Subject</option>
-              {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
-                  {subject.code} - {subject.title}
-                </option>
-              ))}
-            </select>
+          <section className="enrollment-loads-block" aria-labelledby="enrollment-loads-title">
+            <div className="enrollment-loads-block-head">
+              <h3 id="enrollment-loads-title" className="enrollment-subsection-title">
+                Subject loads
+              </h3>
+              <p className="enrollment-loads-block-lede">
+                Course rows for the active term (used for prerequisites and this list). Auto-load copies subjects from the prospectus.
+              </p>
+            </div>
+            <form className="enrollment-load-form" onSubmit={saveLoad}>
+              <select value={selectedTerm} onChange={(e) => setSelectedTerm(e.target.value)} required>
+                <option value="">Term</option>
+                {terms.map((term) => (
+                  <option key={term.id} value={term.id}>
+                    {term.year_label} — Sem {term.semester}
+                    {term.is_active ? ' (active)' : ''}
+                  </option>
+                ))}
+              </select>
 
-            <select value={statusValue} onChange={(e) => setStatusValue(e.target.value)}>
-              <option value="enrolled">enrolled</option>
-              <option value="passed">passed</option>
-              <option value="completed">completed</option>
-            </select>
+              <select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} required>
+                <option value="">Subject</option>
+                {subjects.map((subject) => (
+                  <option key={subject.id} value={subject.id}>
+                    {subject.code} — {subject.title}
+                  </option>
+                ))}
+              </select>
 
-            <button type="submit">Save Load</button>
-          </form>
+              <select value={statusValue} onChange={(e) => setStatusValue(e.target.value)} aria-label="Load status">
+                <option value="enrolled">enrolled</option>
+                <option value="passed">passed</option>
+                <option value="completed">completed</option>
+              </select>
 
-          <div className="form-grid">
-            <button type="button" onClick={previewAutoLoad}>
-              Preview Auto-Load
-            </button>
-            <button type="button" onClick={triggerAutoLoad}>
-              Run Auto-Load
-            </button>
-          </div>
+              <button type="submit" className="enrollment-load-save-btn">
+                Save load
+              </button>
+            </form>
 
-          {!!previewSubjects.length && (
-            <>
-              <h2 className="section-title">Auto-Load Preview</h2>
-              <div className="table-wrap">
+            <div className="enrollment-load-autoload-row">
+              <button type="button" className="enrollment-load-btn-secondary" onClick={previewAutoLoad}>
+                Preview auto-load
+              </button>
+              <button type="button" className="enrollment-load-btn-primary" onClick={triggerAutoLoad}>
+                Run auto-load
+              </button>
+            </div>
+
+            {!!previewSubjects.length && (
+              <details className="enrollment-autoload-preview-details" open>
+                <summary className="enrollment-autoload-preview-summary">
+                  Preview ({previewSubjects.length} subject{previewSubjects.length === 1 ? '' : 's'})
+                </summary>
+                <div className="table-wrap enrollment-autoload-preview-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Code</th>
+                        <th>Title</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewSubjects.map((subject) => (
+                        <tr key={subject.id}>
+                          <td>{subject.code}</td>
+                          <td>{subject.title}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+
+            <div className="enrollment-current-loads-wrap">
+              <h4 className="enrollment-current-loads-heading">Current semester (enrolled)</h4>
+              <div className="table-wrap enrollment-current-loads-table">
                 <table>
                   <thead>
                     <tr>
-                      <th>Subject Code</th>
+                      <th>Term</th>
+                      <th>Subject</th>
                       <th>Title</th>
+                      <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {previewSubjects.map((subject) => (
-                      <tr key={subject.id}>
-                        <td>{subject.code}</td>
-                        <td>{subject.title}</td>
+                    {currentSemesterLoads.map((load) => (
+                      <tr key={load.id}>
+                        <td>{load.term_label}</td>
+                        <td>{load.subject_code}</td>
+                        <td>{load.subject_title}</td>
+                        <td>{load.status}</td>
                       </tr>
                     ))}
+                    {!currentSemesterLoads.length && (
+                      <tr>
+                        <td colSpan={4}>No enrolled subjects for this semester yet.</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
-            </>
-          )}
-
-          <h2 className="section-title">Current Semester Loads</h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Term</th>
-                  <th>Subject</th>
-                  <th>Title</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {currentSemesterLoads.map((load) => (
-                  <tr key={load.id}>
-                    <td>{load.term_label}</td>
-                    <td>{load.subject_code}</td>
-                    <td>{load.subject_title}</td>
-                    <td>{load.status}</td>
-                  </tr>
-                ))}
-                {!currentSemesterLoads.length && (
-                  <tr>
-                    <td colSpan={4}>No enrolled subjects found for the current semester.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </>
+            </div>
+          </section>
+        </div>
       )}
     </section>
   )

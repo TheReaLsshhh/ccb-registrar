@@ -3,6 +3,8 @@ import uuid
 from django.contrib.auth.models import User
 from django.db import models
 
+from .academic_utils import normalize_academic_year_label
+
 
 class TimeStampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
@@ -15,6 +17,104 @@ class TimeStampedModel(models.Model):
 def user_profile_photo_upload_to(instance, filename: str) -> str:
     safe = filename.replace('\\', '/').split('/')[-1]
     return f'profiles/user_{instance.user_id}/{safe}'
+
+
+class Semester(models.IntegerChoices):
+    FIRST = 1, '1st Semester'
+    SECOND = 2, '2nd Semester'
+    SUMMER = 3, 'Summer'
+
+
+class ApprovalStatus(models.TextChoices):
+    PENDING = 'pending', 'Pending'
+    APPROVED = 'approved', 'Approved'
+
+
+class StudentLoadStatus(models.TextChoices):
+    ENROLLED = 'enrolled', 'Enrolled'
+    PASSED = 'passed', 'Passed'
+    COMPLETED = 'completed', 'Completed'
+    DROPPED = 'dropped', 'Dropped'
+    FAILED = 'failed', 'Failed'
+
+
+class AcademicHistoryStatus(models.TextChoices):
+    ONGOING = 'ongoing', 'Ongoing'
+    COMPLETED = 'completed', 'Completed'
+    DROPPED = 'dropped', 'Dropped'
+
+
+class AcademicSubjectStatus(models.TextChoices):
+    ENROLLED = 'enrolled', 'Enrolled'
+    COMPLETED = 'completed', 'Completed'
+    DROPPED = 'dropped', 'Dropped'
+
+
+class ContinuingFolderStatusValue(models.TextChoices):
+    ONGOING = 'ongoing', 'Ongoing'
+    DONE = 'done', 'Done'
+
+
+def _status_key(value) -> str:
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def normalize_choice_value(value, choices_cls):
+    """Normalize known user-entered variants while leaving unknown values visible."""
+    if value is None:
+        return None
+    aliases = {
+        'approve': ApprovalStatus.APPROVED,
+        'approved': ApprovalStatus.APPROVED,
+        'pending': ApprovalStatus.PENDING,
+        'on_going': AcademicHistoryStatus.ONGOING,
+        'ongoing': AcademicHistoryStatus.ONGOING,
+        'complete': AcademicHistoryStatus.COMPLETED,
+        'completed': AcademicHistoryStatus.COMPLETED,
+        'drop': AcademicHistoryStatus.DROPPED,
+        'dropped': AcademicHistoryStatus.DROPPED,
+        'enroll': StudentLoadStatus.ENROLLED,
+        'enrolled': StudentLoadStatus.ENROLLED,
+        'pass': StudentLoadStatus.PASSED,
+        'passed': StudentLoadStatus.PASSED,
+        'fail': StudentLoadStatus.FAILED,
+        'failed': StudentLoadStatus.FAILED,
+        'done': 'done',
+    }
+    key = _status_key(value)
+    candidate = aliases.get(key)
+    allowed = {choice.value for choice in choices_cls}
+    if candidate in allowed:
+        return candidate
+    for choice in choices_cls:
+        if key in {_status_key(choice.value), _status_key(choice.label)}:
+            return choice.value
+    return value
+
+
+def normalize_semester_value(value):
+    if value in (None, ''):
+        return None
+    if isinstance(value, int):
+        return value
+    raw = _status_key(value)
+    aliases = {
+        '1': Semester.FIRST,
+        'first': Semester.FIRST,
+        '1st': Semester.FIRST,
+        '1st_semester': Semester.FIRST,
+        'first_semester': Semester.FIRST,
+        '2': Semester.SECOND,
+        'second': Semester.SECOND,
+        '2nd': Semester.SECOND,
+        '2nd_semester': Semester.SECOND,
+        'second_semester': Semester.SECOND,
+        '3': Semester.SUMMER,
+        'summer': Semester.SUMMER,
+        'summer_semester': Semester.SUMMER,
+    }
+    candidate = aliases.get(raw)
+    return int(candidate) if candidate is not None else value
 
 
 class UserProfile(TimeStampedModel):
@@ -50,7 +150,7 @@ class ProgramOffering(TimeStampedModel):
     """Program + Year Level + Semester with its own Program Adviser and School Dean."""
     program = models.ForeignKey(Program, on_delete=models.PROTECT, related_name='offerings')
     year_level = models.PositiveSmallIntegerField(db_index=True)
-    semester = models.PositiveSmallIntegerField(default=1, db_index=True)
+    semester = models.PositiveSmallIntegerField(choices=Semester.choices, default=Semester.FIRST, db_index=True)
     program_adviser = models.CharField(max_length=120, blank=True)
     school_dean = models.CharField(max_length=120, blank=True)
 
@@ -60,14 +160,22 @@ class ProgramOffering(TimeStampedModel):
     def __str__(self) -> str:
         return f'{self.program.name} Year {self.year_level} - Sem {self.semester}'
 
+    def save(self, *args, **kwargs):
+        self.semester = normalize_semester_value(self.semester)
+        super().save(*args, **kwargs)
+
 
 class AcademicTerm(TimeStampedModel):
     year_label = models.CharField(max_length=20)
-    semester = models.PositiveSmallIntegerField(db_index=True)
+    semester = models.PositiveSmallIntegerField(choices=Semester.choices, db_index=True)
     is_active = models.BooleanField(default=False)
 
     class Meta:
         unique_together = ('year_label', 'semester')
+
+    def save(self, *args, **kwargs):
+        self.semester = normalize_semester_value(self.semester)
+        super().save(*args, **kwargs)
 
 
 class Section(TimeStampedModel):
@@ -92,7 +200,7 @@ class ProspectusEntry(TimeStampedModel):
     program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='prospectus_entries')
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name='prospectus_entries')
     year_level = models.PositiveSmallIntegerField()
-    semester = models.PositiveSmallIntegerField()
+    semester = models.PositiveSmallIntegerField(choices=Semester.choices)
     academic_year = models.CharField(max_length=20, blank=True, default='')
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, related_name='prospectus_entries', null=True, blank=True)
     prerequisite = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name='unlocks', null=True, blank=True)
@@ -105,6 +213,10 @@ class ProspectusEntry(TimeStampedModel):
             models.Index(fields=['year_level', 'semester']),
             models.Index(fields=['program', 'year_level', 'semester', 'academic_year', 'section']),
         ]
+
+    def save(self, *args, **kwargs):
+        self.semester = normalize_semester_value(self.semester)
+        super().save(*args, **kwargs)
 
 
 class Student(TimeStampedModel):
@@ -126,7 +238,7 @@ class Student(TimeStampedModel):
     section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name='students', null=True, blank=True)
     year_level = models.PositiveSmallIntegerField(default=1, db_index=True)
     academic_year = models.CharField(max_length=20, blank=True)
-    semester = models.PositiveSmallIntegerField(null=True, blank=True)
+    semester = models.PositiveSmallIntegerField(choices=Semester.choices, null=True, blank=True)
     home_address = models.TextField(blank=True)
     postal_code = models.CharField(max_length=12, blank=True)
     email_address = models.EmailField(blank=True)
@@ -143,12 +255,28 @@ class Student(TimeStampedModel):
     senior_high_track_strand = models.CharField(max_length=120, blank=True)
     subject_load_schedule = models.TextField(blank=True)
     adviser_name = models.CharField(max_length=120, blank=True)
-    adviser_approval_status = models.CharField(max_length=20, default='pending')
+    adviser_approval_status = models.CharField(
+        max_length=20,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
     adviser_approval_date = models.DateField(null=True, blank=True)
     dean_name = models.CharField(max_length=120, blank=True)
-    dean_approval_status = models.CharField(max_length=20, default='pending')
+    dean_approval_status = models.CharField(
+        max_length=20,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
     dean_approval_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+
+    def save(self, *args, **kwargs):
+        if self.academic_year:
+            self.academic_year = normalize_academic_year_label(self.academic_year)
+        self.semester = normalize_semester_value(self.semester)
+        self.adviser_approval_status = normalize_choice_value(self.adviser_approval_status, ApprovalStatus)
+        self.dean_approval_status = normalize_choice_value(self.dean_approval_status, ApprovalStatus)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return self.student_id
@@ -158,17 +286,25 @@ class StudentLoad(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='loads')
     term = models.ForeignKey(AcademicTerm, on_delete=models.PROTECT, related_name='loads')
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name='student_loads')
-    status = models.CharField(max_length=20, default='enrolled')
+    status = models.CharField(
+        max_length=20,
+        choices=StudentLoadStatus.choices,
+        default=StudentLoadStatus.ENROLLED,
+    )
 
     class Meta:
         unique_together = ('student', 'term', 'subject')
+
+    def save(self, *args, **kwargs):
+        self.status = normalize_choice_value(self.status, StudentLoadStatus)
+        super().save(*args, **kwargs)
 
 
 class AcademicHistory(TimeStampedModel):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='academic_history')
     academic_year = models.CharField(max_length=20)  # "2025-2026"
     year_level = models.PositiveSmallIntegerField()  # 1, 2, 3, 4
-    semester = models.PositiveSmallIntegerField()  # 1, 2, Summer
+    semester = models.PositiveSmallIntegerField(choices=Semester.choices)  # 1, 2, 3/Summer
     program = models.ForeignKey(Program, on_delete=models.PROTECT)
     section = models.ForeignKey(Section, on_delete=models.PROTECT, null=True, blank=True)
     
@@ -210,20 +346,40 @@ class AcademicHistory(TimeStampedModel):
     # Academic Information for this Semester
     subject_load_schedule = models.TextField(blank=True)
     adviser_name = models.CharField(max_length=120, blank=True)
-    adviser_approval_status = models.CharField(max_length=20, default='pending')
+    adviser_approval_status = models.CharField(
+        max_length=20,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
     adviser_approval_date = models.DateField(null=True, blank=True)
     dean_name = models.CharField(max_length=120, blank=True)
-    dean_approval_status = models.CharField(max_length=20, default='pending')
+    dean_approval_status = models.CharField(
+        max_length=20,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.PENDING,
+    )
     dean_approval_date = models.DateField(null=True, blank=True)
     
     # Status and Dates
-    status = models.CharField(max_length=20, default='ongoing')  # ongoing, completed, dropped
+    status = models.CharField(
+        max_length=20,
+        choices=AcademicHistoryStatus.choices,
+        default=AcademicHistoryStatus.ONGOING,
+    )
     start_date = models.DateField()
     end_date = models.DateField(null=True, blank=True)
     
     class Meta:
         unique_together = ('student', 'academic_year', 'semester')
         ordering = ['-academic_year', '-semester']
+
+    def save(self, *args, **kwargs):
+        self.academic_year = normalize_academic_year_label(self.academic_year)
+        self.semester = normalize_semester_value(self.semester)
+        self.adviser_approval_status = normalize_choice_value(self.adviser_approval_status, ApprovalStatus)
+        self.dean_approval_status = normalize_choice_value(self.dean_approval_status, ApprovalStatus)
+        self.status = normalize_choice_value(self.status, AcademicHistoryStatus)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f'{self.student.student_id} - {self.academic_year} Year {self.year_level} Sem {self.semester}'
@@ -233,7 +389,11 @@ class AcademicSubject(TimeStampedModel):
     academic_history = models.ForeignKey(AcademicHistory, on_delete=models.CASCADE, related_name='subjects')
     subject = models.ForeignKey(Subject, on_delete=models.PROTECT)
     credits = models.DecimalField(max_digits=4, decimal_places=1)
-    status = models.CharField(max_length=20, default='enrolled')  # enrolled, completed
+    status = models.CharField(
+        max_length=20,
+        choices=AcademicSubjectStatus.choices,
+        default=AcademicSubjectStatus.ENROLLED,
+    )
     
     class Meta:
         unique_together = ('academic_history', 'subject')
@@ -241,19 +401,20 @@ class AcademicSubject(TimeStampedModel):
     def __str__(self) -> str:
         return f'{self.academic_history.student.student_id} - {self.subject.code}'
 
+    def save(self, *args, **kwargs):
+        self.status = normalize_choice_value(self.status, AcademicSubjectStatus)
+        super().save(*args, **kwargs)
+
 
 class ContinuingFolderStatus(TimeStampedModel):
-    STATUS_ONGOING = 'ongoing'
-    STATUS_DONE = 'done'
-    STATUS_CHOICES = [
-        (STATUS_ONGOING, 'Ongoing'),
-        (STATUS_DONE, 'Done'),
-    ]
+    STATUS_ONGOING = ContinuingFolderStatusValue.ONGOING
+    STATUS_DONE = ContinuingFolderStatusValue.DONE
+    STATUS_CHOICES = ContinuingFolderStatusValue.choices
 
     program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='continuing_folder_statuses')
     academic_year = models.CharField(max_length=20)
     year_level = models.PositiveSmallIntegerField()
-    semester = models.PositiveSmallIntegerField(null=True, blank=True)
+    semester = models.PositiveSmallIntegerField(choices=Semester.choices, null=True, blank=True)
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='continuing_folder_statuses', null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ONGOING)
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_continuing_folder_statuses')
@@ -270,6 +431,11 @@ class ContinuingFolderStatus(TimeStampedModel):
         section_name = self.section.name if self.section_id else 'Unassigned'
         semester = self.semester if self.semester is not None else '-'
         return f'{self.program.name} | {self.academic_year} | Year {self.year_level} | Section {section_name} | Sem {semester}'
+
+    def save(self, *args, **kwargs):
+        self.semester = normalize_semester_value(self.semester)
+        self.status = normalize_choice_value(self.status, ContinuingFolderStatusValue)
+        super().save(*args, **kwargs)
 
 
 class StaffChatConversation(TimeStampedModel):

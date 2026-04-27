@@ -36,6 +36,31 @@ export const authApi = axios.create({
 
 let refreshPromise: Promise<string | null> | null = null
 
+const PROACTIVE_REFRESH_SKEW_MS = 2 * 60 * 1000
+
+/** `exp` claim in seconds, or null if missing/unparseable. */
+function getJwtAccessExpMs(token: string): number | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length < 2) return null
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : ''
+    const payload = JSON.parse(atob(b64 + pad)) as { exp?: unknown }
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+function shouldProactivelyRefreshAccessToken(): boolean {
+  const access = localStorage.getItem('access_token')
+  const refresh = localStorage.getItem('refresh_token')
+  if (!access || !refresh) return false
+  const exp = getJwtAccessExpMs(access)
+  if (exp == null) return false
+  return exp - PROACTIVE_REFRESH_SKEW_MS < Date.now()
+}
+
 async function refreshAccessToken(): Promise<string | null> {
   const refreshToken = localStorage.getItem('refresh_token')
   if (!refreshToken) return null
@@ -62,7 +87,10 @@ async function refreshAccessToken(): Promise<string | null> {
   return refreshPromise
 }
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
+  if (shouldProactivelyRefreshAccessToken()) {
+    await refreshAccessToken()
+  }
   const token = localStorage.getItem('access_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`

@@ -9,6 +9,7 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -35,6 +36,7 @@ from .models import (
     Subject,
     UserProfile,
 )
+from .academic_utils import normalize_academic_year_label
 from .permissions import IsRegistrarOrStaff
 from .serializers import (
     AcademicHistorySerializer,
@@ -58,7 +60,12 @@ from .serializers import (
     SubjectSerializer,
     UserProfileSerializer,
 )
-from .services import auto_load_students, get_eligible_subjects, get_students_with_multiple_academic_history
+from .services import (
+    auto_load_students,
+    consolidate_student_academic_histories,
+    get_eligible_subjects,
+    get_students_with_multiple_academic_history,
+)
 from .staff_chat import (
     STAFF_CHAT_ALLOWED_REACTION_EMOJIS,
     broadcast_staff_chat_message,
@@ -181,12 +188,16 @@ def sync_student_current_academic_history(student):
     if not student.academic_year or not student.semester:
         return None
 
+    consolidate_student_academic_histories(student)
+
     today = date.today()
+    academic_year_key = normalize_academic_year_label(student.academic_year)
     history, _ = AcademicHistory.objects.update_or_create(
         student=student,
-        academic_year=student.academic_year,
+        academic_year=academic_year_key,
         semester=student.semester,
         defaults={
+            'academic_year': academic_year_key,
             'year_level': student.year_level,
             'program': student.program,
             'section': student.section,
@@ -875,18 +886,27 @@ class ProspectusViewSet(BaseRegistrarViewSet):
         except (TypeError, ValueError):
             return Response({'detail': 'Invalid numeric value in request payload.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        academic_year = str(request.data['academic_year']).strip()
-        if not academic_year:
+        source_academic_year = str(request.data['academic_year']).strip()
+        if not source_academic_year:
             return Response({'detail': 'academic_year cannot be empty.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if source_section_id == target_section_id:
-            return Response({'detail': 'Source and target sections must be different.'}, status=status.HTTP_400_BAD_REQUEST)
+        raw_target_year = request.data.get('target_academic_year', None)
+        if raw_target_year is None or (isinstance(raw_target_year, str) and not str(raw_target_year).strip()):
+            target_academic_year = source_academic_year
+        else:
+            target_academic_year = str(raw_target_year).strip()
+
+        if source_section_id == target_section_id and source_academic_year == target_academic_year:
+            return Response(
+                {'detail': 'Source and target sections must differ when copying within the same school year.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         source_entries = ProspectusEntry.objects.filter(
             program_id=program_id,
             year_level=year_level,
             semester=semester,
-            academic_year=academic_year,
+            academic_year=source_academic_year,
             section_id=source_section_id,
         ).values('subject_id', 'prerequisite_id', 'time', 'room')
 
@@ -902,7 +922,7 @@ class ProspectusViewSet(BaseRegistrarViewSet):
                     subject_id=entry['subject_id'],
                     year_level=year_level,
                     semester=semester,
-                    academic_year=academic_year,
+                    academic_year=target_academic_year,
                     section_id=target_section_id,
                     defaults={
                         'prerequisite_id': entry['prerequisite_id'],
@@ -925,7 +945,8 @@ class ProspectusViewSet(BaseRegistrarViewSet):
                     'program': program_id,
                     'year_level': year_level,
                     'semester': semester,
-                    'academic_year': academic_year,
+                    'source_academic_year': source_academic_year,
+                    'target_academic_year': target_academic_year,
                     'source_section': source_section_id,
                     'target_section': target_section_id,
                     'created': created,
@@ -1159,6 +1180,8 @@ class ContinuingViewSet(BaseRegistrarViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        target_academic_year = normalize_academic_year_label(str(target_academic_year))
+
         term = None
         if term_id:
             try:
@@ -1199,8 +1222,9 @@ class ContinuingViewSet(BaseRegistrarViewSet):
 
         with transaction.atomic():
             for student in students.select_for_update():
+                consolidate_student_academic_histories(student)
                 current_semester = student.semester or 1
-                current_academic_year = student.academic_year or target_academic_year
+                current_academic_year = normalize_academic_year_label(student.academic_year or target_academic_year)
                 resolved_subject_load_schedule = subject_load_schedule or student.subject_load_schedule
                 resolved_adviser_name = adviser_name.strip() or student.adviser_name
                 resolved_dean_name = dean_name.strip() or student.dean_name
@@ -1212,6 +1236,7 @@ class ContinuingViewSet(BaseRegistrarViewSet):
                     academic_year=current_academic_year,
                     semester=current_semester,
                     defaults={
+                        'academic_year': current_academic_year,
                         'year_level': student.year_level,
                         'program': student.program,
                         'section': student.section,
@@ -1257,7 +1282,7 @@ class ContinuingViewSet(BaseRegistrarViewSet):
 
                 student.program_id = int(target_program)
                 student.year_level = int(target_year_level)
-                student.academic_year = target_academic_year
+                student.academic_year = normalize_academic_year_label(target_academic_year)
                 student.semester = int(target_semester)
                 if target_section not in [None, '']:
                     student.section_id = int(target_section)
@@ -1272,11 +1297,13 @@ class ContinuingViewSet(BaseRegistrarViewSet):
                 student.dean_approval_date = resolved_dean_approval_date
                 student.save()
 
+                next_year_key = normalize_academic_year_label(student.academic_year)
                 AcademicHistory.objects.update_or_create(
                     student=student,
-                    academic_year=student.academic_year,
+                    academic_year=next_year_key,
                     semester=student.semester,
                     defaults={
+                        'academic_year': next_year_key,
                         'year_level': student.year_level,
                         'program': student.program,
                         'section': student.section,
@@ -1355,7 +1382,16 @@ class ContinuingViewSet(BaseRegistrarViewSet):
         )
 
 
+class AuditLogPagination(PageNumberPagination):
+    """Dashboard and clients can page through the full audit history."""
+
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class AuditLogViewSet(ReadOnlyModelViewSet):
     permission_classes = [IsRegistrarOrStaff]
     queryset = AuditLog.objects.select_related('actor').all().order_by('-created_at')
     serializer_class = AuditLogSerializer
+    pagination_class = AuditLogPagination

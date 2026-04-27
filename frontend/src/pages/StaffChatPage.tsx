@@ -964,11 +964,17 @@ export function StaffChatPage() {
   if (!staffChatOk) {
     return (
       <section className="card staff-chat-page">
-        <h1 className="page-title staff-chat-page-title">
-          <StaffChatIcon />
-          Staff Chat
-        </h1>
-        <p className="staff-chat-muted">Only registrar staff or administrator accounts can use office chat.</p>
+        <header className="staff-chat-intro-header">
+          <h1 className="staff-chat-intro-title staff-chat-page-title">
+            <StaffChatIcon aria-hidden />
+            <span>Staff Chat</span>
+          </h1>
+          <p className="staff-chat-intro-lede">Only registrar staff or administrator accounts can use office chat.</p>
+        </header>
+        <p className="workflow-route-hint">
+          Staff chat is separate from student records. Ask an administrator to mark your Django user as <strong>staff</strong> if you need
+          access.
+        </p>
       </section>
     )
   }
@@ -993,29 +999,40 @@ export function StaffChatPage() {
   return (
     <section className="card staff-chat-page">
       <header className="staff-chat-header">
-        <h1 className="page-title staff-chat-page-title">
-          <StaffChatIcon />
-          Staff Chat
-        </h1>
-        <span
-          className={`staff-chat-ws staff-chat-ws--${wsState}`}
-          role="img"
-          aria-label={
-            wsState === 'open'
-              ? 'Realtime connected'
-              : wsState === 'connecting'
-                ? 'Realtime connecting'
-                : 'Realtime disconnected'
-          }
-          title={
-            wsState === 'open'
-              ? 'Realtime: connected'
-              : wsState === 'connecting'
-                ? 'Realtime: connecting'
-                : 'Realtime: disconnected'
-          }
-        />
+        <div className="staff-chat-header-top">
+          <h1 className="staff-chat-intro-title staff-chat-page-title">
+            <StaffChatIcon aria-hidden />
+            <span>Staff Chat</span>
+          </h1>
+          <span
+            className={`staff-chat-ws staff-chat-ws--${wsState}`}
+            role="img"
+            aria-label={
+              wsState === 'open'
+                ? 'Realtime connected'
+                : wsState === 'connecting'
+                  ? 'Realtime connecting'
+                  : 'Realtime disconnected'
+            }
+            title={
+              wsState === 'open'
+                ? 'Realtime: connected'
+                : wsState === 'connecting'
+                  ? 'Realtime: connecting'
+                  : 'Realtime: disconnected'
+            }
+          />
+        </div>
+        <p className="staff-chat-intro-lede">
+          Live office messaging between staff accounts — not visible to students. Presence reflects recent activity on this site.
+        </p>
       </header>
+
+      <p className="workflow-route-hint">
+        Office messaging between staff accounts — not visible to students. Messages may include attachments; use for coordination alongside{' '}
+        <strong>Enrollment</strong>, <strong>Continuing</strong>, and <strong>Admin</strong> workflows. Presence and the dot indicator reflect
+        recent activity on this site.
+      </p>
 
       {loadError ? <p className="form-error staff-chat-banner">{loadError}</p> : null}
 

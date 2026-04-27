@@ -1,7 +1,7 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 
 import { api, getErrorMessage } from '../api'
-import { SaveIcon } from '../components/Icons'
+import { AdminIcon, SaveIcon } from '../components/Icons'
 
 type Department = {
   id: number
@@ -75,8 +75,6 @@ export function AdminPage() {
 
   const [programName, setProgramName] = useState('')
   const [programDepartment, setProgramDepartment] = useState('')
-  const [programAdviser, setProgramAdviser] = useState('')
-  const [programDean, setProgramDean] = useState('')
   const [editingProgramId, setEditingProgramId] = useState<number | null>(null)
 
   const [offeringProgram, setOfferingProgram] = useState('')
@@ -161,8 +159,6 @@ export function AdminPage() {
   const resetProgramForm = () => {
     setProgramName('')
     setProgramDepartment('')
-    setProgramAdviser('')
-    setProgramDean('')
     setEditingProgramId(null)
   }
 
@@ -206,12 +202,13 @@ export function AdminPage() {
   const submitProgram = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     await withFeedback(async () => {
+      const existingProgram = editingProgramId ? programs.find((p) => p.id === editingProgramId) : null
       const payload = {
         name: programName,
         code: '',
         department: Number(programDepartment),
-        program_adviser: programAdviser,
-        school_dean: programDean,
+        program_adviser: existingProgram?.program_adviser ?? '',
+        school_dean: existingProgram?.school_dean ?? '',
       }
       if (editingProgramId) {
         await api.put(`/programs/${editingProgramId}/`, payload)
@@ -283,8 +280,6 @@ export function AdminPage() {
   const startEditProgram = (program: Program) => {
     setProgramName(program.name)
     setProgramDepartment(String(program.department))
-    setProgramAdviser(program.program_adviser || '')
-    setProgramDean(program.school_dean || '')
     setEditingProgramId(program.id)
   }
 
@@ -326,10 +321,57 @@ export function AdminPage() {
     return `${programName} Year ${section.year_level} - ${semesterLabel}`
   }
 
+  const continuingReadiness = useMemo(() => {
+    const programsMissingOfferings = programs.filter((p) => !programOfferings.some((o) => o.program === p.id))
+    return {
+      hasTerms: terms.length > 0,
+      hasActiveTerm: terms.some((t) => t.is_active),
+      hasSections: sections.length > 0,
+      programsMissingOfferings,
+    }
+  }, [programs, programOfferings, terms, sections])
+
   return (
-    <section className="card">
-      <h1>Admin Module</h1>
-      <p>Manage departments, programs, terms, and sections.</p>
+    <section className="card admin-page">
+      <header className="admin-page-header">
+        <h1 className="admin-page-title">
+          <AdminIcon aria-hidden />
+          <span>Admin Module</span>
+        </h1>
+        <p className="admin-page-lede">Manage departments, programs, terms, and sections.</p>
+      </header>
+      <p className="workflow-route-hint">
+        For continuing enrollment: create <strong>Program Offerings</strong> — adviser and dean per program, year level, and semester.
+        The Continuing module reads those names first when staff match those three fields; update an offering anytime staff change. Then add
+        an <strong>Academic Term</strong> whose year label matches the school year on forms (e.g. 2026-2027), then <strong>Sections</strong>{' '}
+        for that program and term, then map subjects on Prospectus.
+      </p>
+
+      <div className="admin-readiness-panel" role="region" aria-label="Continuing enrollment readiness">
+        <div className="admin-readiness-title">Continuing Enrollment Checklist</div>
+        <ul className="continuing-readiness-list">
+          <li className={continuingReadiness.programsMissingOfferings.length ? 'continuing-readiness-item is-warn' : 'continuing-readiness-item is-ok'}>
+            {continuingReadiness.programsMissingOfferings.length
+              ? `Program offerings: add at least one row per program — missing for ${continuingReadiness.programsMissingOfferings.map((p) => p.name).join(', ')}.`
+              : 'Program offerings: every program has at least one year/semester row (Continuing uses these for adviser/dean names first).'}
+          </li>
+          <li className={continuingReadiness.hasTerms ? 'continuing-readiness-item is-ok' : 'continuing-readiness-item is-warn'}>
+            {continuingReadiness.hasTerms
+              ? 'Academic terms: at least one term is defined.'
+              : 'Academic terms: none defined yet; Continuing cannot match school year and semester.'}
+          </li>
+          <li className={continuingReadiness.hasActiveTerm ? 'continuing-readiness-item is-ok' : 'continuing-readiness-item is-warn'}>
+            {continuingReadiness.hasActiveTerm
+              ? 'Active term: at least one term is marked active (used when promoting with auto-load).'
+              : 'Active term: none marked active; set one under Create Academic Term when enrolling a cohort.'}
+          </li>
+          <li className={continuingReadiness.hasSections ? 'continuing-readiness-item is-ok' : 'continuing-readiness-item is-warn'}>
+            {continuingReadiness.hasSections
+              ? 'Sections: at least one section exists.'
+              : 'Sections: none yet; create sections after programs and terms exist.'}
+          </li>
+        </ul>
+      </div>
 
       {error && <p className="error-text">{error}</p>}
       {success && <p className="success-text">{success}</p>}
@@ -349,6 +391,9 @@ export function AdminPage() {
       </form>
 
       <h2 className="section-title">Create Program</h2>
+      <p className="workflow-route-hint admin-program-offerings-hint">
+        Set program adviser and school dean per year and semester under <strong>Program Offerings</strong> below.
+      </p>
       <form className="form-grid" onSubmit={submitProgram}>
         <input placeholder="Program Name" value={programName} onChange={(e) => setProgramName(e.target.value)} required />
         <select value={programDepartment} onChange={(e) => setProgramDepartment(e.target.value)} required>
@@ -359,8 +404,6 @@ export function AdminPage() {
             </option>
           ))}
         </select>
-        <input placeholder="Program Adviser (optional)" value={programAdviser} onChange={(e) => setProgramAdviser(e.target.value)} />
-        <input placeholder="School Dean (optional)" value={programDean} onChange={(e) => setProgramDean(e.target.value)} />
         <button type="submit" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <SaveIcon /> {editingProgramId ? 'Update Program' : 'Save Program'}
         </button>
@@ -559,7 +602,7 @@ export function AdminPage() {
 
         <details className="admin-folder" open={openFolders.programOfferings} onToggle={(event) => onFolderToggle('programOfferings', event.currentTarget.open)}>
           <summary>
-            <span className="folder-title">Program Offerings (Program Â· Year Â· Semester)</span>
+            <span className="folder-title">Program Offerings (Program · Year · Semester)</span>
             <span className="folder-count">{programOfferings.length}</span>
           </summary>
           <div className="folder-body table-wrap">

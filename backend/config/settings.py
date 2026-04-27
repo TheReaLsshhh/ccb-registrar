@@ -140,6 +140,26 @@ CSRF_TRUSTED_ORIGINS = _dedupe_keep_order(
 
 CORS_ALLOW_CREDENTIALS = True
 
+
+def _jwt_access_lifetime() -> timedelta:
+    """
+    Env priority (aligns with .env.example):
+    1) JWT_ACCESS_MINUTES — fine-grained
+    2) JWT_ACCESS_DAYS — default for local: 7 days if unset
+    """
+    minutes_raw = os.getenv('JWT_ACCESS_MINUTES', '').strip()
+    if minutes_raw:
+        minutes = int(minutes_raw)
+        return timedelta(minutes=max(1, minutes))
+    days = int(os.getenv('JWT_ACCESS_DAYS', '7'))
+    return timedelta(days=max(1, days))
+
+
+def _jwt_refresh_lifetime() -> timedelta:
+    days = int(os.getenv('JWT_REFRESH_DAYS', '30'))
+    return timedelta(days=max(1, days))
+
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'registrar.authentication.JWTAuthenticationWithGlobalLogout',
@@ -150,8 +170,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=int(os.getenv('JWT_ACCESS_DAYS', '1'))),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': _jwt_access_lifetime(),
+    'REFRESH_TOKEN_LIFETIME': _jwt_refresh_lifetime(),
 }
 
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')

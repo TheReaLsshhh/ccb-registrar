@@ -500,7 +500,7 @@ export function EditProfilePage() {
 
   if (loading) {
     return (
-      <section className="card">
+      <section className="card edit-profile-route-page">
         <p>Loading profile…</p>
       </section>
     )
@@ -508,7 +508,7 @@ export function EditProfilePage() {
 
   if (!me) {
     return (
-      <section className="card">
+      <section className="card edit-profile-route-page">
         <p>Unable to load profile.</p>
       </section>
     )
@@ -517,18 +517,26 @@ export function EditProfilePage() {
   const hasDisplayedProfileImage = !pendingPhotoRemoval && Boolean(pendingPhotoPreviewUrl || me.photo_url)
 
   return (
-    <section className="card">
-      <div className="edit-profile-page-header">
-        <h1 style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
-          <AdminIcon /> Edit Profile
-        </h1>
-        {(me.is_superuser || me.is_staff) && (
-          <button type="button" className="confirm-btn" onClick={handleOpenCreateAccount}>
-            Create Account
-          </button>
-        )}
-      </div>
-      <p>Manage your account information, profile photo, and sign‑in details.</p>
+    <section className="card edit-profile-route-page">
+      <header className="edit-profile-route-header">
+        <div className="edit-profile-route-header-top">
+          <h1 className="edit-profile-route-title">
+            <AdminIcon aria-hidden />
+            <span>Edit Profile</span>
+          </h1>
+          {(me.is_superuser || me.is_staff) && (
+            <button type="button" className="confirm-btn" onClick={handleOpenCreateAccount}>
+              Create Account
+            </button>
+          )}
+        </div>
+        <p className="edit-profile-route-lede">Manage your account information, profile photo, and sign‑in details.</p>
+      </header>
+      <p className="workflow-route-hint">
+        Changes here affect <strong>your sign-in</strong> and how your name or photo appear across the app. Staff with privileges can also{' '}
+        <strong>Create Account</strong> for new registrar users. This page does not edit student records — use <strong>Enrollment</strong> or{' '}
+        <strong>Continuing</strong> for student data.
+      </p>
 
       {activeNotification && activeNotificationMeta && (
         <div className="enrollment-notice-overlay" role="presentation">

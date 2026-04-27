@@ -2,8 +2,10 @@ from collections import defaultdict
 
 from django.db import transaction
 from django.db.models import Count
+from django.db.models.functions import Trim
 
-from .models import AcademicHistory, AcademicTerm, ProspectusEntry, Student, StudentLoad
+from .academic_utils import normalize_academic_year_label
+from .models import AcademicHistory, AcademicSubject, AcademicTerm, ProspectusEntry, Student, StudentLoad
 
 
 def _has_passed_prerequisite(student, prerequisite_subject):
@@ -25,7 +27,7 @@ def _prospectus_entries_for_student(student, term, subject=None):
     if subject is not None:
         base_qs = base_qs.filter(subject=subject)
 
-    year = student.academic_year or ''
+    year = normalize_academic_year_label(student.academic_year or '')
     section_id = student.section_id
 
     if year and section_id:
@@ -72,35 +74,81 @@ def auto_load_students(student_ids, term_id):
     return {'created_load_rows': created}
 
 
+def consolidate_student_academic_histories(student: Student) -> int:
+    """
+    Merge duplicate AcademicHistory rows for the same student that share the same logical
+    (school year after normalization, semester). Moves AcademicSubject rows onto one keeper
+    row and deletes extras so update_or_create() cannot raise MultipleObjectsReturned.
+
+    Returns the number of AcademicHistory rows removed.
+    """
+    rows = list(AcademicHistory.objects.filter(student=student).order_by('id'))
+    if len(rows) < 2:
+        return 0
+
+    groups: dict[tuple[str, int], list[AcademicHistory]] = defaultdict(list)
+    for row in rows:
+        key = (normalize_academic_year_label(row.academic_year), row.semester)
+        groups[key].append(row)
+
+    removed = 0
+    for _key, group in groups.items():
+        if len(group) <= 1:
+            continue
+        keeper = max(group, key=lambda x: (x.updated_at, x.pk))
+        for dup in group:
+            if dup.pk == keeper.pk:
+                continue
+            for sub in AcademicSubject.objects.filter(academic_history=dup).select_related('subject'):
+                AcademicSubject.objects.update_or_create(
+                    academic_history=keeper,
+                    subject=sub.subject,
+                    defaults={'credits': sub.credits, 'status': sub.status},
+                )
+            dup.delete()
+            removed += 1
+
+        nay = normalize_academic_year_label(keeper.academic_year)
+        AcademicHistory.objects.filter(pk=keeper.pk).update(academic_year=nay)
+
+    return removed
+
+
 def get_students_with_multiple_academic_history(limit=None):
-    duplicate_rows = list(
-        AcademicHistory.objects.values(
-            'student_id',
-            'student__student_id',
-            'student__first_name',
-            'student__last_name',
-        )
+    """
+    Students who have more than one AcademicHistory row for the same (trimmed school year, semester).
+    """
+    duplicate_key_rows = (
+        AcademicHistory.objects.annotate(ay_trim=Trim('academic_year'))
+        .values('student_id', 'ay_trim', 'semester')
         .annotate(history_count=Count('id'))
         .filter(history_count__gt=1)
-        .order_by('-history_count', 'student__student_id')[:limit]
+        .order_by('-history_count', 'student_id', 'ay_trim', 'semester')
     )
+    if limit is not None:
+        duplicate_key_rows = duplicate_key_rows[: int(limit)]
 
-    if not duplicate_rows:
+    rows = list(duplicate_key_rows)
+    if not rows:
         return []
 
-    student_ids = [row['student_id'] for row in duplicate_rows]
+    student_ids = list({r['student_id'] for r in rows})
+    students = {s.id: s for s in Student.objects.filter(pk__in=student_ids)}
     history_rows = (
         AcademicHistory.objects.filter(student_id__in=student_ids)
+        .annotate(ay_trim=Trim('academic_year'))
         .select_related('program', 'section')
-        .order_by('student__student_id', 'academic_year', 'semester', 'id')
+        .order_by('student_id', 'ay_trim', 'semester', 'id')
     )
 
-    histories_by_student = defaultdict(list)
+    histories_by_key: dict[tuple[int, str, int], list[dict]] = defaultdict(list)
     for history in history_rows:
-        histories_by_student[history.student_id].append(
+        key = (history.student_id, history.ay_trim, history.semester)
+        histories_by_key[key].append(
             {
                 'id': history.id,
                 'academic_year': history.academic_year,
+                'ay_trim': history.ay_trim,
                 'semester': history.semester,
                 'year_level': history.year_level,
                 'status': history.status,
@@ -110,18 +158,18 @@ def get_students_with_multiple_academic_history(limit=None):
         )
 
     results = []
-    for row in duplicate_rows:
+    for row in rows:
+        key = (row['student_id'], row['ay_trim'], row['semester'])
+        st = students.get(row['student_id'])
         results.append(
             {
                 'student_pk': row['student_id'],
-                'student_id': row['student__student_id'],
-                'student_name': ' '.join(
-                    part
-                    for part in [row['student__first_name'], row['student__last_name']]
-                    if part
-                ),
+                'student_id': st.student_id if st else '',
+                'student_name': ' '.join(part for part in [st.first_name, st.last_name] if st and part) if st else '',
                 'history_count': row['history_count'],
-                'histories': histories_by_student[row['student_id']],
+                'ay_trim': row['ay_trim'],
+                'semester': row['semester'],
+                'histories': histories_by_key[key],
             }
         )
     return results
